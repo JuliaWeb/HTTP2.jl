@@ -1,4 +1,4 @@
-module Example
+module HTTP2
 export hello, domath
 
 """
