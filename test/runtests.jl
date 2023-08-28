@@ -1,4 +1,6 @@
-using Test, Example
+using Test, HTTP2
 
-@test hello("Julia") == "Hello, Julia"
-@test domath(2.0) ≈ 7.0
+const httpbin = get(ENV, "JULIA_TEST_HTTPBINGO_SERVER", "httpbingo.julialang.org")
+
+include("utils.jl")
+include("client.jl")

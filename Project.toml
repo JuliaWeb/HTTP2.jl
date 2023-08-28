@@ -2,6 +2,9 @@ name = "HTTP2"
 uuid = "b77c38ae-d26b-ff15-6dc9-5bc94be9e2a6"
 version = "1.0.0"
 
+[deps]
+CodecZlibNG = "642d12eb-acb5-4437-bcfc-a25e07ad685c"
+
 [compat]
 julia = "1.6"
 

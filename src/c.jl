@@ -233,8 +233,16 @@ function aws_byte_cursor_from_c_str(c_str)
     ccall((:aws_byte_cursor_from_c_str, libawscrt), aws_byte_cursor, (Ptr{Cchar},), c_str)
 end
 
+function aws_byte_cursor_from_array(bytes, len)
+    ccall((:aws_byte_cursor_from_array, libawscrt), aws_byte_cursor, (Ptr{Cvoid}, Csize_t), bytes, len)
+end
+
 function aws_byte_cursor_eq_c_str_ignore_case(cursor, c_str)
     ccall((:aws_byte_cursor_eq_c_str_ignore_case, libawscrt), Bool, (Ref{aws_byte_cursor}, Ptr{Cchar}), cursor, c_str)
+end
+
+function aws_byte_cursor_eq_ignore_case(a, b)
+    ccall((:aws_byte_cursor_eq_ignore_case, libawscrt), Bool, (Ref{aws_byte_cursor}, Ref{aws_byte_cursor}), a, b)
 end
 
 const aws_input_stream = Cvoid

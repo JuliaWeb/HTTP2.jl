@@ -1,5 +1,7 @@
 module HTTP2
 
+using CodecZlibNG
+
 const libawscrt = "/Users/quinnj/aws-crt/lib/libaws-c-http"
 const libawsio = "/Users/quinnj/aws-crt/lib/libaws-c-io"
 
@@ -20,6 +22,10 @@ function ascii_lc_isequal(a, b)
 end
 
 hasheader(h, k) = any(x -> ascii_lc_isequal(x.first, k), h)
+function getheader(h, k, d="")
+    i = findfirst(x -> ascii_lc_isequal(x.first, k), h)
+    return i === nothing ? d : h[i].second
+end
 
 include("c.jl")
 
@@ -53,6 +59,7 @@ mutable struct RequestContext
     request::Request
     response::Response
     temp_response_body::Any # Union{Nothing, IOBuffer}
+    gzip_decompressor::Union{Nothing, CodecZlibNG.GzipDecompressor}
     # keyword arguments
     # socket options
     socket_domain::Symbol
@@ -71,6 +78,8 @@ mutable struct RequestContext
     # connection manager options
     max_connections::Int
     max_connection_idle_in_milliseconds::Int
+    decompress::Union{Nothing, Bool}
+    status_exception::Bool
 end
 
 function RequestContext(allocator, bootstrap, request, response, args...)
@@ -82,7 +91,7 @@ function RequestContext(allocator, bootstrap, request, response, args...)
     else
         response_body = response.body
     end
-    return RequestContext(allocator, bootstrap, C_NULL, false, Threads.Event(), nothing, request, response, response_body, args...)
+    return RequestContext(allocator, bootstrap, C_NULL, false, Threads.Event(), nothing, request, response, response_body, nothing, args...)
 end
 
 struct StatusError <: Exception
@@ -127,7 +136,7 @@ function __init__()
     # populate default allocator
     ALLOCATOR[] = aws_default_allocator()
     @assert ALLOCATOR[] != C_NULL
-    # populate default event loop group; 0 means one event loop per non-hypterthread core
+    # populate default event loop group; 0 means one event loop per non-hyperthread core
     EVENT_LOOP_GROUP[] = aws_event_loop_group_new_default(ALLOCATOR[], 0, C_NULL)
     @assert EVENT_LOOP_GROUP[] != C_NULL
     # populate default host resolver

@@ -1,7 +1,7 @@
 const on_setup = Ref{Ptr{Cvoid}}(C_NULL)
 
 function c_on_setup(conn, error_code, user_data)
-    println("on setup")
+    # println("on setup")
     ctx = unsafe_pointer_to_objref(user_data)
     if error_code != 0
         ctx.error = CapturedException(aws_error(), Base.backtrace())
@@ -51,6 +51,10 @@ function c_on_setup(conn, error_code, user_data)
     # user-agent header
     if !hasheader(headers, "user-agent")
         push!(headers, "user-agent" => USER_AGENT[])
+    end
+    # accept-encoding
+    if ctx.decompress === nothing || ctx.decompress
+        push!(headers, "accept-encoding" => "gzip")
     end
     # add headers to request
     for (k, v) in headers
@@ -143,7 +147,9 @@ function c_on_response_headers(stream, header_block, header_array, num_headers, 
     ctx = unsafe_pointer_to_objref(user_data)
     headers = unsafe_wrap(Array, Ptr{aws_http_header}(header_array), num_headers)
     for header in headers
-        push!(ctx.response.headers, unsafe_string(header.name.ptr, header.name.len) => unsafe_string(header.value.ptr, header.value.len))
+        name = unsafe_string(header.name.ptr, header.name.len)
+        value = unsafe_string(header.value.ptr, header.value.len)
+        push!(ctx.response.headers, name => value)
     end
     return Cint(0)
 end
@@ -155,7 +161,18 @@ function c_on_response_header_block_done(stream, header_block, user_data)
     ref = Ref{Cint}()
     aws_http_stream_get_incoming_response_status(stream, ref)
     ctx.response.status = ref[]
-    if ctx.response.status >= 299
+    if ctx.decompress === true || (ctx.decompress === nothing && getheader(ctx.response.headers, "content-encoding") == "gzip")
+        if ctx.temp_response_body isa Vector{UInt8}
+            io = IOBuffer(ctx.temp_response_body; write=true)
+            ctx.temp_response_body = CodecZlibNG.GzipDecompressorStream(io)
+        else
+            ctx.temp_response_body = CodecZlibNG.GzipDecompressorStream(ctx.temp_response_body)
+        end
+    end
+    if hasheader(ctx.response.headers, "content-length") && ctx.temp_response_body isa Vector{UInt8}
+        resize!(ctx.temp_response_body, parse(Int, getheader(ctx.response.headers, "content-length")))
+    end
+    if ctx.status_exception && ctx.response.status >= 299
         ctx.error = StatusError(ctx.request, ctx.response)
         ctx.should_retry = true # TODO: only retry non-idempotent, certain status codes, etc.
     end
@@ -173,7 +190,6 @@ function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, user_data)
     elseif body isa Base.GenericIOBuffer{SubArray{UInt8, 1, Vector{UInt8}, Tuple{UnitRange{Int64}}, true}}
         unsafe_write(body, bc.ptr, bc.len)
     elseif body isa Vector{UInt8}
-        resize!(body, length(body) + bc.len)
         unsafe_copyto!(pointer(body) + length(body) - bc.len, bc.ptr, bc.len)
     else
         unsafe_write(body, bc.ptr, bc.len)
@@ -185,6 +201,9 @@ const on_complete = Ref{Ptr{Cvoid}}(C_NULL)
 
 function c_on_complete(stream, error_code, user_data)
     ctx = unsafe_pointer_to_objref(user_data)
+    if ctx.temp_response_body isa CodecZlibNG.GzipDecompressorStream
+        close(ctx.temp_response_body)
+    end
     aws_http_stream_release(stream)
     Threads.notify(ctx.completed)
     return
@@ -224,6 +243,8 @@ function request(req::Request;
     max_connection_idle_in_milliseconds::Integer=60000,
     # response options
     response_body=nothing,
+    decompress::Union{Nothing, Bool}=nothing,
+    status_exception::Bool=true,
     verbose=0, # 1-6
 )
     # enable logging
@@ -249,6 +270,8 @@ function request(req::Request;
         # connection manager options
         max_connections,
         max_connection_idle_in_milliseconds,
+        decompress,
+        status_exception
     )
 
     # retry options
@@ -382,7 +405,7 @@ function c_on_acquired(retry_strategy, error_code, retry_token::Ptr{aws_retry_to
             return cm
         end
         # initiate the remote connection, which will then kick off the cascade of callbacks
-        println("acquiring connection")
+        # println("acquiring connection")
         aws_http_connection_manager_acquire_connection(connection_manager, on_setup[], ctx)
     catch e
         ctx.error = e
