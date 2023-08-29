@@ -6,6 +6,7 @@ version = "1.0.0"
 CodecZlibNG = "642d12eb-acb5-4437-bcfc-a25e07ad685c"
 
 [compat]
+CodecZlibNG = "0.1"
 julia = "1.6"
 
 [extras]
