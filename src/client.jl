@@ -1,8 +1,7 @@
 const on_setup = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_setup(conn, error_code, user_data)
+function c_on_setup(conn, error_code, ctx)
     # println("on setup")
-    ctx = unsafe_pointer_to_objref(user_data)
     if error_code != 0
         ctx.error = CapturedException(aws_error(), Base.backtrace())
         if erro_code == AWS_IO_DNS_INVALID_NAME || error_code == AWS_IO_TLS_ERROR_NEGOTIATION_FAILURE
@@ -124,6 +123,7 @@ function c_on_setup(conn, error_code, user_data)
         return
     end
     aws_http_message_release(request)
+    ctx.stream = stream
     aws_http_stream_activate(stream)
     aws_http_connection_release(conn)
     return
@@ -131,8 +131,7 @@ end
 
 const on_shutdown = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_shutdown(conn, error_code, user_data)
-    ctx = unsafe_pointer_to_objref(user_data)
+function c_on_shutdown(conn, error_code, ctx)
     if error_code != 0
         ctx.error = CapturedException(aws_error(), Base.backtrace())
         ctx.should_retry = true
@@ -143,8 +142,7 @@ end
 
 const on_response_headers = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_response_headers(stream, header_block, header_array, num_headers, user_data)
-    ctx = unsafe_pointer_to_objref(user_data)
+function c_on_response_headers(stream, header_block, header_array, num_headers, ctx)
     headers = unsafe_wrap(Array, Ptr{aws_http_header}(header_array), num_headers)
     for header in headers
         name = unsafe_string(header.name.ptr, header.name.len)
@@ -156,8 +154,7 @@ end
 
 const on_response_header_block_done = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_response_header_block_done(stream, header_block, user_data)
-    ctx = unsafe_pointer_to_objref(user_data)
+function c_on_response_header_block_done(stream, header_block, ctx)
     ref = Ref{Cint}()
     aws_http_stream_get_incoming_response_status(stream, ref)
     ctx.response.status = ref[]
@@ -170,7 +167,9 @@ function c_on_response_header_block_done(stream, header_block, user_data)
         end
     end
     if hasheader(ctx.response.headers, "content-length") && ctx.temp_response_body isa Vector{UInt8}
-        resize!(ctx.temp_response_body, parse(Int, getheader(ctx.response.headers, "content-length")))
+        buf = ctx.temp_response_body
+        resize!(buf, parse(Int, getheader(ctx.response.headers, "content-length")))
+        ctx.temp_response_body = IOBuffer(buf; write=true, maxsize=length(buf))
     end
     if ctx.status_exception && ctx.response.status >= 299
         ctx.error = StatusError(ctx.request, ctx.response)
@@ -181,27 +180,54 @@ end
 
 const on_response_body = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, user_data)
-    ctx = unsafe_pointer_to_objref(user_data)
+function hasroom(buf::Base.GenericIOBuffer, n)
+    requested_buffer_capacity = (buf.append ? buf.size : (buf.ptr - 1)) + n
+    return (requested_buffer_capacity <= length(buf.data)) || (buf.writable && requested_buffer_capacity <= buf.maxsize)
+end
+
+function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx)
     bc = unsafe_load(data)
     body = ctx.temp_response_body
     if body isa IOBuffer
+        if !hasroom(body, bc.len)
+            ctx.error = CapturedException(ArgumentError("response body buffer is too small"), Base.backtrace())
+            ctx.should_retry = false
+            Threads.notify(ctx.completed)
+        end
         unsafe_write(body, bc.ptr, bc.len)
     elseif body isa Base.GenericIOBuffer{SubArray{UInt8, 1, Vector{UInt8}, Tuple{UnitRange{Int64}}, true}}
+        if !hasroom(body, bc.len)
+            ctx.error = CapturedException(ArgumentError("response body buffer is too small"), Base.backtrace())
+            ctx.should_retry = false
+            Threads.notify(ctx.completed)
+        end
         unsafe_write(body, bc.ptr, bc.len)
     elseif body isa Vector{UInt8}
+        resize!(body, length(body) + bc.len)
         unsafe_copyto!(pointer(body) + length(body) - bc.len, bc.ptr, bc.len)
+    elseif body isa CodecZlibNG.TranscodingStreams.TranscodingStream{GzipDecompressor, IOBuffer}
+        unsafe_write(body, bc.ptr, bc.len)
     else
         unsafe_write(body, bc.ptr, bc.len)
     end
     return Cint(0)
 end
 
+const on_metrics = Ref{Ptr{Cvoid}}(C_NULL)
+
+function c_on_metrics(stream, metrics::Ptr{StreamMetrics}, ctx)
+    # println("on metrics")
+    m = unsafe_load(metrics)
+    if m.send_start_timestamp_ns != -1
+        ctx.response.metrics = m
+    end
+    return
+end
+
 const on_complete = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_complete(stream, error_code, user_data)
-    ctx = unsafe_pointer_to_objref(user_data)
-    if ctx.temp_response_body isa CodecZlibNG.GzipDecompressorStream
+function c_on_complete(stream, error_code, ctx)
+    if ctx.temp_response_body isa CodecZlibNG.TranscodingStreams.TranscodingStream{GzipDecompressor, IOBuffer}
         close(ctx.temp_response_body)
     end
     aws_http_stream_release(stream)
@@ -209,7 +235,13 @@ function c_on_complete(stream, error_code, user_data)
     return
 end
 
-request(method, url, headers=Header[], body::RequestBodyTypes=nothing; allocator=ALLOCATOR[], kw...) =
+const on_destroy = Ref{Ptr{Cvoid}}(C_NULL)
+
+function c_on_destroy(ctx)
+    return
+end
+
+request(method, url, h=Header[], b::RequestBodyTypes=nothing; allocator=ALLOCATOR[], headers=h, body::RequestBodyTypes=b, kw...) =
     request(Request(method, url, headers, body, allocator); allocator, kw...)
 
 # main entrypoint for making an HTTP request
@@ -328,14 +360,13 @@ end
 
 const on_acquired = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_acquired(retry_strategy, error_code, retry_token::Ptr{aws_retry_token}, user_data)
+function c_on_acquired(retry_strategy, error_code, retry_token::Ptr{aws_retry_token}, ctx)
     if error_code != 0
         ctx.error = CapturedException(aws_error(), Base.backtrace())
         ctx.should_retry = false # don't retry if we failed to get an initial retry_token
         Threads.notify(ctx.completed)
         return
     end
-    ctx = unsafe_pointer_to_objref(user_data)
     ctx.retry_token = retry_token
     # if port is given explicitly then use it, otherwise use 80 for http and 443 for https
     req = ctx.request

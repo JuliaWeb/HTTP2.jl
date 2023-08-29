@@ -1,4 +1,4 @@
-using Test, HTTP2
+using Test, HTTP2, JSONBase
 
 const httpbin = get(ENV, "JULIA_TEST_HTTPBINGO_SERVER", "httpbingo.julialang.org")
 

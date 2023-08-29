@@ -41,13 +41,24 @@ end
 Request(method, url, headers, body, allocator) =
     Request(method, aws_uri(url, allocator), something(headers, Header[]), body)
 
+struct StreamMetrics
+    send_start_timestamp_ns::Int64
+    send_end_timestamp_ns::Int64
+    sending_duration_ns::Int64
+    receive_start_timestamp_ns::Int64
+    receive_end_timestamp_ns::Int64
+    receiving_duration_ns::Int64
+    stream_id::UInt32
+end
+
 mutable struct Response
     status::Int
     headers::Headers
     body::Any # IO or Vector{UInt8}
+    metrics::Union{Nothing, StreamMetrics}
 end
 
-Response(body=UInt8[]) = Response(0, Header[], body)
+Response(body=UInt8[]) = Response(0, Header[], body, nothing)
 
 mutable struct RequestContext
     allocator::Ptr{aws_allocator}
@@ -59,7 +70,7 @@ mutable struct RequestContext
     request::Request
     response::Response
     temp_response_body::Any # Union{Nothing, IOBuffer}
-    gzip_decompressor::Union{Nothing, CodecZlibNG.GzipDecompressor}
+    stream::Ptr{Cvoid}
     # keyword arguments
     # socket options
     socket_domain::Symbol
@@ -91,7 +102,7 @@ function RequestContext(allocator, bootstrap, request, response, args...)
     else
         response_body = response.body
     end
-    return RequestContext(allocator, bootstrap, C_NULL, false, Threads.Event(), nothing, request, response, response_body, nothing, args...)
+    return RequestContext(allocator, bootstrap, C_NULL, false, Threads.Event(), nothing, request, response, response_body, C_NULL, args...)
 end
 
 struct StatusError <: Exception
@@ -154,13 +165,15 @@ function __init__()
     aws_logger_set(LOGGER[])
     # intialize http library
     aws_http_library_init(ALLOCATOR[])
-    on_acquired[] = @cfunction(c_on_acquired, Cvoid, (Ptr{Cvoid}, Cint, Ptr{Cvoid}, Ptr{Cvoid}))
-    on_shutdown[] = @cfunction(c_on_shutdown, Cvoid, (Ptr{Cvoid}, Cint, Ptr{Cvoid}))
-    on_setup[] = @cfunction(c_on_setup, Cvoid, (Ptr{Cvoid}, Cint, Ptr{Cvoid}))
-    on_response_headers[] = @cfunction(c_on_response_headers, Cint, (Ptr{Cvoid}, Cint, Ptr{Cvoid}, Csize_t, Ptr{Cvoid}))
-    on_response_header_block_done[] = @cfunction(c_on_response_header_block_done, Cint, (Ptr{Cvoid}, Cint, Ptr{Cvoid}))
-    on_response_body[] = @cfunction(c_on_response_body, Cint, (Ptr{Cvoid}, Ptr{aws_byte_cursor}, Ptr{Cvoid}))
-    on_complete[] = @cfunction(c_on_complete, Cvoid, (Ptr{Cvoid}, Cint, Ptr{Cvoid}))
+    on_acquired[] = @cfunction(c_on_acquired, Cvoid, (Ptr{Cvoid}, Cint, Ptr{Cvoid}, Any))
+    on_shutdown[] = @cfunction(c_on_shutdown, Cvoid, (Ptr{Cvoid}, Cint, Any))
+    on_setup[] = @cfunction(c_on_setup, Cvoid, (Ptr{Cvoid}, Cint, Any))
+    on_response_headers[] = @cfunction(c_on_response_headers, Cint, (Ptr{Cvoid}, Cint, Ptr{Cvoid}, Csize_t, Any))
+    on_response_header_block_done[] = @cfunction(c_on_response_header_block_done, Cint, (Ptr{Cvoid}, Cint, Any))
+    on_response_body[] = @cfunction(c_on_response_body, Cint, (Ptr{Cvoid}, Ptr{aws_byte_cursor}, Any))
+    on_metrics[] = @cfunction(c_on_metrics, Cvoid, (Ptr{Cvoid}, Ptr{StreamMetrics}, Any))
+    on_complete[] = @cfunction(c_on_complete, Cvoid, (Ptr{Cvoid}, Cint, Any))
+    on_destroy[] = @cfunction(c_on_destroy, Cvoid, (Any,))
     return
 end
 

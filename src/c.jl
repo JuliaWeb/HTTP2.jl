@@ -631,7 +631,10 @@ mutable struct aws_http_make_request_options
     on_response_headers::Ptr{Cvoid}
     on_response_header_block_done::Ptr{Cvoid}
     on_response_body::Ptr{Cvoid}
+    on_metrics::Ptr{Cvoid}
     on_complete::Ptr{Cvoid}
+    on_destroy::Ptr{Cvoid}
+    http2_use_manual_data_writes::Bool
 end
 
 function aws_http_make_request_options(request::Ptr{aws_http_message}, ctx::Any)
@@ -642,7 +645,10 @@ function aws_http_make_request_options(request::Ptr{aws_http_message}, ctx::Any)
         on_response_headers[],
         on_response_header_block_done[],
         on_response_body[],
+        on_metrics[],
         on_complete[],
+        on_destroy[],
+        false,
     )
 end
 

@@ -22,10 +22,10 @@
         @test isascii(String(r.body))
     end
 
-    # @testset "ASync Client Requests" begin
-    #     @test isok(fetch(@async HTTP2.get("https://$httpbin/ip")))
-    #     @test isok(HTTP2.get("https://$httpbin/encoding/utf8"))
-    # end
+    @testset "ASync Client Requests" begin
+        @test isok(fetch(@async HTTP2.get("https://$httpbin/ip")))
+        @test isok(HTTP2.get("https://$httpbin/encoding/utf8"))
+    end
 
     # @testset "Query to URI" begin
     #     r = HTTP2.get(URI(HTTP2.URI("https://$httpbin/response-headers"); query=Dict("hey"=>"dude")))
@@ -53,134 +53,101 @@
     #     @test length(cookies) == 1
     # end
 
-    # @testset "Client Streaming Test" begin
-    #     r = HTTP2.post("https://$httpbin/post"; body="hey")
-    #     @test isok(r)
+    @testset "Client Streaming Test" begin
+        r = HTTP2.post("https://$httpbin/post"; body="hey")
+        @test isok(r)
+        @test JSONBase.materialize(r.body)["data"] == "hey"
 
-    #     # stream, but body is too small to actually stream
-    #     r = HTTP2.post("https://$httpbin/post"; body="hey", stream=true)
-    #     @test isok(r)
+        r = HTTP2.get("https://$httpbin/stream/100")
+        @test isok(r)
 
-    #     r = HTTP2.get("https://$httpbin/stream/100")
-    #     @test isok(r)
+        x = JSONBase.materialize(r.body; jsonlines=true);
 
-    #     bytes = r.body
-    #     a = [JSON.parse(l) for l in split(chomp(String(bytes)), "\n")]
-    #     totallen = length(bytes) # number of bytes to expect
+        io = IOBuffer()
+        r = HTTP2.get("https://$httpbin/stream/100"; response_body=io)
+        seekstart(io)
+        @test isok(r)
 
-    #     io = IOBuffer()
-    #     r = HTTP2.get("https://$httpbin/stream/100"; response_stream=io)
-    #     seekstart(io)
-    #     @test isok(r)
+        x2 = JSONBase.materialize(io; jsonlines=true);
+        @test x == x2
 
-    #     b = [JSON.parse(l) for l in eachline(io)]
-    #     @test all(zip(a, b)) do (x, y)
-    #         x["args"] == y["args"] &&
-    #         x["id"] == y["id"] &&
-    #         x["url"] == y["url"] &&
-    #         x["origin"] == y["origin"] &&
-    #         x["headers"]["Content-Length"] == y["headers"]["Content-Length"] &&
-    #         x["headers"]["Host"] == y["headers"]["Host"] &&
-    #         x["headers"]["User-Agent"] == y["headers"]["User-Agent"]
-    #     end
+        # pass pre-allocated buffer
+        body = zeros(UInt8, 100)
+        r = HTTP2.get("https://$httpbin/bytes/100"; response_body=body)
+        @test body === r.body
 
-    #     # pass pre-allocated buffer
-    #     body = zeros(UInt8, 100)
-    #     r = HTTP2.get("https://$httpbin/bytes/100"; response_stream=body)
-    #     @test body === r.body
+        # wrapping pre-allocated buffer in IOBuffer will write to buffer directly
+        io = IOBuffer(body; write=true)
+        r = HTTP2.get("https://$httpbin/bytes/100"; response_body=io)
+        @test body === r.body.data
 
-    #     # wrapping pre-allocated buffer in IOBuffer will write to buffer directly
-    #     io = IOBuffer(body; write=true)
-    #     r = HTTP2.get("https://$httpbin/bytes/100"; response_stream=io)
-    #     @test body === r.body.data
+        # if provided buffer is too small, we won't grow it for user
+        body = zeros(UInt8, 10)
+        @test_throws CapturedException HTTP2.get("https://$httpbin/bytes/100"; response_body=body)
 
-    #     # if provided buffer is too small, we won't grow it for user
-    #     body = zeros(UInt8, 10)
-    #     @test_throws HTTP2.RequestError HTTP2.get("https://$httpbin/bytes/100"; response_stream=body, retry=false)
+        # also won't shrink it if buffer provided is larger than response body
+        body = zeros(UInt8, 10)
+        r = HTTP2.get("https://$httpbin/bytes/5"; response_body=body)
+        @test body === r.body
+        @test length(body) == 10
+        @test HTTP2.getheader(r.headers, "Content-Length") == "5"
 
-    #     # also won't shrink it if buffer provided is larger than response body
-    #     body = zeros(UInt8, 10)
-    #     r = HTTP2.get("https://$httpbin/bytes/5"; response_stream=body)
-    #     @test body === r.body
-    #     @test length(body) == 10
-    #     @test HTTP2.header(r, "Content-Length") == "5"
+        # but if you wrap it in a writable IOBuffer, we will grow it
+        io = IOBuffer(body; write=true)
+        r = HTTP2.get("https://$httpbin/bytes/100"; response_body=io)
+        # same Array, though it was resized larger
+        @test body === r.body.data
+        @test length(body) == 100
 
-    #     # but if you wrap it in a writable IOBuffer, we will grow it
-    #     io = IOBuffer(body; write=true)
-    #     r = HTTP2.get("https://$httpbin/bytes/100"; response_stream=io)
-    #     # same Array, though it was resized larger
-    #     @test body === r.body.data
-    #     @test length(body) == 100
+        # and you can reuse it
+        seekstart(io)
+        r = HTTP2.get("https://$httpbin/bytes/100"; response_body=io)
+        # same Array, though it was resized larger
+        @test body === r.body.data
+        @test length(body) == 100
 
-    #     # and you can reuse it
-    #     seekstart(io)
-    #     r = HTTP2.get("https://$httpbin/bytes/100"; response_stream=io)
-    #     # same Array, though it was resized larger
-    #     @test body === r.body.data
-    #     @test length(body) == 100
+        # we respect ptr and size
+        body = zeros(UInt8, 100)
+        io = IOBuffer(body; write=true, append=true) # size=100, ptr=1
+        r = HTTP2.get("https://$httpbin/bytes/100"; response_body=io)
+        @test length(body) == 200
 
-    #     # we respect ptr and size
-    #     body = zeros(UInt8, 100)
-    #     io = IOBuffer(body; write=true, append=true) # size=100, ptr=1
-    #     r = HTTP2.get("https://$httpbin/bytes/100"; response_stream=io)
-    #     @test length(body) == 200
+        body = zeros(UInt8, 100)
+        io = IOBuffer(body, write=true, append=false)
+        write(io, body) # size=100, ptr=101
+        r = HTTP2.get("https://$httpbin/bytes/100"; response_body=io)
+        @test length(body) == 200
 
-    #     body = zeros(UInt8, 100)
-    #     io = IOBuffer(body, write=true, append=false)
-    #     write(io, body) # size=100, ptr=101
-    #     r = HTTP2.get("https://$httpbin/bytes/100"; response_stream=io)
-    #     @test length(body) == 200
+    end
 
-    # end
-
-    # @testset "Client Body Posting - Vector{UTF8}, String, IOStream, IOBuffer, BufferStream, Dict, NamedTuple" begin
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body="hey"))
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body=UInt8['h','e','y']))
-    #     io = IOBuffer("hey"); seekstart(io)
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body=io))
-    #     tmp = tempname()
-    #     open(f->write(f, "hey"), tmp, "w")
-    #     io = open(tmp)
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body=io, enablechunked=false))
-    #     close(io); rm(tmp)
-    #     f = Base.BufferStream()
-    #     write(f, "hey")
-    #     close(f)
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body=f, enablechunked=false))
-    #     resp = HTTP2.post("https://$httpbin/post"; body=Dict("name" => "value"))
-    #     @test isok(resp)
-    #     x = JSON.parse(IOBuffer(resp.body))
-    #     @test x["form"] == Dict("name" => ["value"])
-    #     resp = HTTP2.post("https://$httpbin/post"; body=(name="value with spaces",))
-    #     @test isok(resp)
-    #     x = JSON.parse(IOBuffer(resp.body))
-    #     @test x["form"] == Dict("name" => ["value with spaces"])
-    # end
-
-    # @testset "Chunksize" begin
-    #     #     https://github.com/JuliaWeb/HTTP2.jl/issues/60
-    #     #     Currently $httpbin responds with 411 status and “Length Required”
-    #     #     message to any POST/PUT requests that are sent using chunked encoding
-    #     #     See https://github.com/kennethreitz/httpbin/issues/340#issuecomment-330176449
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body="hey", #=chunksize=2=#))
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body=UInt8['h','e','y'], #=chunksize=2=#))
-    #     io = IOBuffer("hey"); seekstart(io)
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body=io, #=chunksize=2=#))
-    #     tmp = tempname()
-    #     open(f->write(f, "hey"), tmp, "w")
-    #     io = open(tmp)
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body=io, #=chunksize=2=#))
-    #     close(io); rm(tmp)
-    #     f = Base.BufferStream()
-    #     write(f, "hey")
-    #     close(f)
-    #     @test isok(HTTP2.post("https://$httpbin/post"; body=f, #=chunksize=2=#))
-    # end
+    @testset "Client Body Posting - Vector{UTF8}, String, IOStream, IOBuffer, BufferStream, Dict, NamedTuple" begin
+        @test isok(HTTP2.post("https://$httpbin/post"; body="hey"))
+        @test isok(HTTP2.post("https://$httpbin/post"; body=UInt8['h','e','y']))
+        io = IOBuffer("hey"); seekstart(io)
+        @test isok(HTTP2.post("https://$httpbin/post"; body=io))
+        tmp = tempname()
+        open(f->write(f, "hey"), tmp, "w")
+        io = open(tmp)
+        @test isok(HTTP2.post("https://$httpbin/post"; body=io))
+        close(io); rm(tmp)
+        f = Base.BufferStream()
+        write(f, "hey")
+        close(f)
+        @test isok(HTTP2.post("https://$httpbin/post"; body=f))
+        resp = HTTP2.post("https://$httpbin/post"; body=Dict("name" => "value"))
+        @test isok(resp)
+        x = JSONBase.materialize(resp.body)
+        @test x["form"] == Dict("name" => ["value"])
+        resp = HTTP2.post("https://$httpbin/post"; body=(name="value with spaces",))
+        @test isok(resp)
+        x = JSONBase.materialize(resp.body)
+        @test x["form"] == Dict("name" => ["value with spaces"])
+    end
 
     # @testset "ASync Client Request Body" begin
     #     f = Base.BufferStream()
     #     write(f, "hey")
-    #     t = @async HTTP2.post("https://$httpbin/post"; body=f, enablechunked=false)
+    #     t = @async HTTP2.post("https://$httpbin/post"; body=f)
     #     #fetch(f) # fetch for the async call to write it's first data
     #     write(f, " there ") # as we write to f, it triggers another chunk to be sent in our async request
     #     write(f, "sailor")
