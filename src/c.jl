@@ -227,14 +227,20 @@ struct aws_byte_cursor
 end
 
 aws_byte_cursor() = aws_byte_cursor(0, C_NULL)
-Base.String(cursor::aws_byte_cursor) = unsafe_string(cursor.ptr, cursor.len)
+Base.String(cursor::aws_byte_cursor) = cursor.ptr == C_NULL ? "" : unsafe_string(cursor.ptr, cursor.len)
 
 function aws_byte_cursor_from_c_str(c_str)
     ccall((:aws_byte_cursor_from_c_str, libawscrt), aws_byte_cursor, (Ptr{Cchar},), c_str)
 end
 
+Base.convert(::Type{aws_byte_cursor}, x::Union{aws_byte_cursor, AbstractString}) = x isa aws_byte_cursor ? x : aws_byte_cursor_from_c_str(x)
+
 function aws_byte_cursor_from_array(bytes, len)
     ccall((:aws_byte_cursor_from_array, libawscrt), aws_byte_cursor, (Ptr{Cvoid}, Csize_t), bytes, len)
+end
+
+function aws_byte_cursor_eq(a, b)
+    ccall((:aws_byte_cursor_eq, libawscrt), Bool, (Ptr{aws_byte_cursor}, Ptr{aws_byte_cursor}), a, b)
 end
 
 function aws_byte_cursor_eq_c_str_ignore_case(cursor, c_str)
@@ -244,6 +250,14 @@ end
 function aws_byte_cursor_eq_ignore_case(a, b)
     ccall((:aws_byte_cursor_eq_ignore_case, libawscrt), Bool, (Ref{aws_byte_cursor}, Ref{aws_byte_cursor}), a, b)
 end
+
+Base.isempty(cursor::aws_byte_cursor) = cursor.len == 0
+
+function aws_hash_byte_cursor_ptr_ignore_case(item)
+    ccall((:aws_hash_byte_cursor_ptr_ignore_case, libawscrt), UInt64, (Ref{aws_byte_cursor},), item)
+end
+
+Base.hash(cursor::aws_byte_cursor, h::UInt64) = aws_hash_byte_cursor_ptr_ignore_case(cursor)
 
 const aws_input_stream = Cvoid
 
@@ -291,10 +305,27 @@ mutable struct aws_uri
         uri_cursor = aws_byte_cursor_from_c_str(string(url))
         uri = new()
         aws_uri_init_parse(uri, allocator, uri_cursor) != 0 && aws_error()
+        if uri.port == 0 && aws_byte_cursor_eq_c_str_ignore_case(uri.scheme, "http")
+            uri.port = 80
+        elseif uri.port == 0 && aws_byte_cursor_eq_c_str_ignore_case(uri.scheme, "https")
+            uri.port = 443
+        end
         finalizer(aws_uri_clean_up, uri)
         return uri
     end
     aws_uri() = new()
+end
+
+function URIs.URI(url::aws_uri)
+    return URI(;
+        scheme=String(url.scheme),
+        userinfo=String(url.userinfo),
+        host=String(url.host_name),
+        port=string(url.port),
+        path=String(url.path),
+        query=String(url.query_string),
+        fragment=String(url.path_and_query),
+    )
 end
 
 function aws_uri_init_parse(uri, allocator, uri_str)
@@ -476,13 +507,22 @@ function aws_http_connection_manager_options(
 end
 
 const aws_http_connection_manager = Cvoid
+const aws_http_connection = Cvoid
 
 function aws_http_connection_manager_new(allocator, options)
     ccall((:aws_http_connection_manager_new, libawscrt), Ptr{aws_http_connection_manager}, (Ptr{aws_allocator}, Ref{aws_http_connection_manager_options}), allocator, options)
 end
 
+function aws_http_connection_manager_release(manager)
+    ccall((:aws_http_connection_manager_release, libawscrt), Cvoid, (Ptr{aws_http_connection_manager},), manager)
+end
+
 function aws_http_connection_manager_acquire_connection(manager, callback, user_data)
     ccall((:aws_http_connection_manager_acquire_connection, libawscrt), Cvoid, (Ptr{aws_http_connection_manager}, Ptr{Cvoid}, Any), manager, callback, user_data)
+end
+
+function aws_http_connection_manager_release_connection(manager, connection)
+    ccall((:aws_http_connection_manager_release_connection, libawscrt), Cint, (Ptr{aws_http_connection_manager}, Ptr{aws_http_connection}), manager, connection)
 end
 
 mutable struct aws_http_client_connection_options
@@ -544,7 +584,6 @@ return aws_http_client_connection_options(
 end
 
 const aws_http_stream = Cvoid
-const aws_http_connection = Cvoid
 
 @enum aws_http_version::UInt32 begin
     AWS_HTTP_VERSION_UNKNOWN = 0
@@ -788,6 +827,10 @@ function aws_retry_strategy_new_standard(allocator, config)
     ccall((:aws_retry_strategy_new_standard, libawsio), Ptr{aws_retry_strategy}, (Ptr{aws_allocator}, Ref{aws_standard_retry_options}), allocator, config)
 end
 
+function aws_retry_strategy_release(retry_strategy)
+    ccall((:aws_retry_strategy_release, libawsio), Cvoid, (Ptr{aws_retry_strategy},), retry_strategy)
+end
+
 function aws_retry_strategy_acquire_retry_token(retry_strategy, partition_id, on_acquired, user_data, timeout_ms)
     ccall((:aws_retry_strategy_acquire_retry_token, libawsio), Cint, (Ptr{aws_retry_strategy}, Ref{aws_byte_cursor}, Ptr{Cvoid}, Any, UInt64), retry_strategy, partition_id, on_acquired, user_data, timeout_ms)
 end
@@ -802,7 +845,7 @@ const aws_retry_token = Cvoid
 end
 
 function aws_retry_strategy_schedule_retry(token, error_type, retry_ready, user_data)
-    ccall((:aws_retry_strategy_schedule_retry, libawsio), Cint, (Ptr{aws_retry_token}, aws_retry_error_type, Ptr{Cvoid}, Ptr{Cvoid}), token, error_type, retry_ready, user_data)
+    ccall((:aws_retry_strategy_schedule_retry, libawsio), Cint, (Ptr{aws_retry_token}, aws_retry_error_type, Ptr{Cvoid}, Any), token, error_type, retry_ready, user_data)
 end
 
 function aws_retry_token_record_success(token)

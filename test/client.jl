@@ -144,25 +144,25 @@
         @test x["form"] == Dict("name" => ["value with spaces"])
     end
 
-    # @testset "ASync Client Request Body" begin
-    #     f = Base.BufferStream()
-    #     write(f, "hey")
-    #     t = @async HTTP2.post("https://$httpbin/post"; body=f)
-    #     #fetch(f) # fetch for the async call to write it's first data
-    #     write(f, " there ") # as we write to f, it triggers another chunk to be sent in our async request
-    #     write(f, "sailor")
-    #     close(f) # setting eof on f causes the async request to send a final chunk and return the response
-    #     @test isok(fetch(t))
-    # end
+    @testset "ASync Client Request Body" begin
+        f = Base.BufferStream()
+        write(f, "hey")
+        t = @async HTTP2.post("https://$httpbin/post"; body=f)
+        #fetch(f) # fetch for the async call to write it's first data
+        write(f, " there ") # as we write to f, it triggers another chunk to be sent in our async request
+        write(f, "sailor")
+        close(f) # setting eof on f causes the async request to send a final chunk and return the response
+        @test isok(fetch(t))
+    end
 
-    # @testset "Client Redirect Following - $read_method" for read_method in ["GET", "HEAD"]
-    #     @test isok(HTTP2.request(read_method, "https://$httpbin/redirect/1"))
-    #     @test HTTP2.request(read_method, "https://$httpbin/redirect/1", redirect=false).status == 302
-    #     @test HTTP2.request(read_method, "https://$httpbin/redirect/6").status == 302 #over max number of redirects
-    #     @test isok(HTTP2.request(read_method, "https://$httpbin/relative-redirect/1"))
-    #     @test isok(HTTP2.request(read_method, "https://$httpbin/absolute-redirect/1"))
-    #     @test isok(HTTP2.request(read_method, "https://$httpbin/redirect-to?url=http%3A%2F%2Fgoogle.com"))
-    # end
+    @testset "Client Redirect Following - $read_method" for read_method in ["GET", "HEAD"]
+        @test isok(HTTP2.request(read_method, "https://$httpbin/redirect/1"))
+        @test HTTP2.request(read_method, "https://$httpbin/redirect/1", redirect=false, status_exception=false).status == 302
+        @test HTTP2.request(read_method, "https://$httpbin/redirect/6", status_exception=false).status == 302 #over max number of redirects
+        @test isok(HTTP2.request(read_method, "https://$httpbin/relative-redirect/1"))
+        @test isok(HTTP2.request(read_method, "https://$httpbin/absolute-redirect/1"))
+        @test isok(HTTP2.request(read_method, "https://$httpbin/redirect-to?url=http%3A%2F%2Fgoogle.com"))
+    end
 
     # @testset "Client Basic Auth" begin
     #     @test isok(HTTP2.get("https://user:pwd@$httpbin/basic-auth/user/pwd"))

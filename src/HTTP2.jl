@@ -1,32 +1,11 @@
 module HTTP2
 
-using CodecZlibNG
+using CodecZlibNG, URIs
 
 const libawscrt = "/Users/quinnj/aws-crt/lib/libaws-c-http"
 const libawsio = "/Users/quinnj/aws-crt/lib/libaws-c-io"
 
-const Header = Pair{String, String}
-const Headers = Vector{Header}
-
-ascii_lc(c::UInt8) = c in UInt8('A'):UInt8('Z') ? c + 0x20 : c
-ascii_lc_isequal(a::UInt8, b::UInt8) = ascii_lc(a) == ascii_lc(b)
-function ascii_lc_isequal(a, b)
-    acu = codeunits(a)
-    bcu = codeunits(b)
-    len = length(acu)
-    len != length(bcu) && return false
-    for i = 1:len
-        @inbounds !ascii_lc_isequal(acu[i], bcu[i]) && return false
-    end
-    return true
-end
-
-hasheader(h, k) = any(x -> ascii_lc_isequal(x.first, k), h)
-function getheader(h, k, d="")
-    i = findfirst(x -> ascii_lc_isequal(x.first, k), h)
-    return i === nothing ? d : h[i].second
-end
-
+include("utils.jl")
 include("c.jl")
 
 const RequestBodyTypes = Union{AbstractString, AbstractVector{UInt8}, IO, AbstractDict, NamedTuple, Nothing}
@@ -60,49 +39,163 @@ end
 
 Response(body=UInt8[]) = Response(0, Header[], body, nothing)
 
-mutable struct RequestContext
+# we use finalizers only because Clients are meant to be global consts and never
+# short-lived, temporary objects that should clean themselves up efficiently
+mutable struct Client
+    host::String
+    port::UInt16
     allocator::Ptr{aws_allocator}
-    bootstrap::Ptr{aws_client_bootstrap}
+    retry_strategy::Ptr{Cvoid}
+    retry_timeout_ms::Int
+    connection_manager::Ptr{Cvoid}
+
+    function Client(host::String, port::UInt16;
+        allocator=ALLOCATOR[],
+        bootstrap=CLIENT_BOOTSTRAP[],
+        event_loop_group=EVENT_LOOP_GROUP[], # this should probably default to the elg from bootstrap
+        # retry options
+        max_retries::Integer=10,
+        backoff_scale_factor_ms::Integer=25,
+        max_backoff_secs::Integer=20,
+        jitter_mode::aws_exponential_backoff_jitter_mode=AWS_EXPONENTIAL_BACKOFF_JITTER_DEFAULT,
+        retry_timeout_ms::Integer=60000,
+        # socket options
+        socket_domain=:ipv4,
+        connect_timeout_ms::Integer=3000,
+        keep_alive_interval_sec::Integer=0,
+        keep_alive_timeout_sec::Integer=0,
+        keep_alive_max_failed_probes::Integer=0,
+        keepalive::Bool=false,
+        # tls options
+        ssl_cert=nothing,
+        ssl_key=nothing,
+        ssl_capath=nothing,
+        ssl_cacert=nothing,
+        ssl_insecure=false,
+        ssl_alpn_list="h2;http/1.1",
+        # connection manager options
+        max_connections::Integer=512,
+        max_connection_idle_in_milliseconds::Integer=60000,
+    )
+        # retry strategy
+        retry_opts = aws_standard_retry_options(
+            max_retries,
+            backoff_scale_factor_ms,
+            max_backoff_secs,
+            jitter_mode,
+            event_loop_group
+        )
+        retry_strategy = aws_retry_strategy_new_standard(allocator, retry_opts)
+        retry_strategy == C_NULL && aws_throw_error()
+        # socket options
+        socket_options = aws_socket_options(
+            AWS_SOCKET_STREAM, # socket type
+            socket_domain == :ipv4 ? AWS_SOCKET_IPV4 : AWS_SOCKET_IPV6, # socket domain
+            connect_timeout_ms,
+            keep_alive_interval_sec,
+            keep_alive_timeout_sec,
+            keep_alive_max_failed_probes,
+            keepalive
+        )
+        # tls options
+        tls_options = aws_mem_acquire(allocator, 64)
+        tls_ctx_options = aws_mem_acquire(allocator, 512)
+        tls_ctx = C_NULL
+        connection_manager = C_NULL
+        try
+            if ssl_cert !== nothing && ssl_key !== nothing
+                aws_tls_ctx_options_init_client_mtls_from_path(tls_ctx_options, allocator, ssl_cert, ssl_key) != 0 && aws_throw_error()
+            elseif Sys.iswindows() && ssl_cert !== nothing && ssl_key === nothing
+                aws_tls_ctx_options_init_client_mtls_from_system_path(tls_ctx_options, allocator, ssl_cert) != 0 && aws_throw_error()
+            else
+                aws_tls_ctx_options_init_default_client(tls_ctx_options, allocator)
+            end
+            if ssl_capath !== nothing && ssl_cacert !== nothing
+                aws_tls_ctx_options_override_default_trust_store_from_path(tls_ctx_options, ssl_capath, ssl_cacert) != 0 && aws_throw_error()
+            end
+            if ssl_insecure
+                aws_tls_ctx_options_set_verify_peer(tls_ctx_options, false)
+            end
+            aws_tls_ctx_options_set_alpn_list(tls_ctx_options, ssl_alpn_list) != 0 && aws_throw_error()
+            tls_ctx = aws_tls_client_ctx_new(allocator, tls_ctx_options)
+            tls_ctx == C_NULL && aws_throw_error()
+            aws_tls_connection_options_init_from_ctx(tls_options, tls_ctx)
+            aws_tls_connection_options_set_server_name(tls_options, allocator, aws_byte_cursor_from_c_str(host)) != 0 && aws_throw_error()
+            http_connection_manager_options = aws_http_connection_manager_options(
+                bootstrap,
+                socket_options,
+                tls_options,
+                aws_byte_cursor_from_c_str(host),
+                port,
+                max_connections,
+                max_connection_idle_in_milliseconds
+            )
+            connection_manager = aws_http_connection_manager_new(allocator, http_connection_manager_options)
+        finally
+            aws_tls_connection_options_clean_up(tls_options)
+            aws_tls_ctx_options_clean_up(tls_ctx_options)
+            aws_tls_ctx_release(tls_ctx)
+            aws_mem_release(allocator, tls_options)
+            aws_mem_release(allocator, tls_ctx_options)
+        end
+        connection_manager == C_NULL && aws_throw_error()
+        client = new(host, port, allocator, retry_strategy, retry_timeout_ms, connection_manager)
+        finalizer(client) do x
+            if x.connection_manager != C_NULL
+                aws_http_connection_manager_release(x.connection_manager)
+                x.connection_manager = C_NULL
+            end
+            if x.retry_strategy != C_NULL
+                aws_retry_strategy_release(x.retry_strategy)
+                x.retry_strategy = C_NULL
+            end
+        end
+        return client
+    end
+end
+
+struct Clients
+    lock::ReentrantLock
+    clients::Dict{Tuple{String, UInt16}, Client}
+end
+
+Clients() = Clients(ReentrantLock(), Dict{Tuple{String, UInt16}, Client}())
+
+const CLIENTS = Clients()
+
+function getclient(key::Tuple{String, UInt16})
+    Base.@lock CLIENTS.lock begin
+        if haskey(CLIENTS.clients, key)
+            return CLIENTS.clients[key]
+        else
+            client = Client(key...)
+            CLIENTS.clients[key] = client
+            return client
+        end
+    end
+end
+
+mutable struct RequestContext
+    client::Client
     retry_token::Ptr{aws_retry_token}
     should_retry::Bool
     completed::Threads.Event
     error::Union{Nothing, Exception}
     request::Request
     response::Response
-    temp_response_body::Any # Union{Nothing, IOBuffer}
+    temp_response_body::Any
+    gzip_decompressing::Bool
+    error_response_body::Union{Nothing, Vector{UInt8}}
+    connection::Ptr{Cvoid}
     stream::Ptr{Cvoid}
-    # keyword arguments
-    # socket options
-    socket_domain::Symbol
-    connect_timeout_ms::Int
-    keep_alive_interval_sec::Int
-    keep_alive_timeout_sec::Int
-    keep_alive_max_failed_probes::Int
-    keepalive::Bool
-    # tls options
-    ssl_cert::Union{Nothing, String}
-    ssl_key::Union{Nothing, String}
-    ssl_capath::Union{Nothing, String}
-    ssl_cacert::Union{Nothing, String}
-    ssl_insecure::Bool
-    ssl_alpn_list::String
-    # connection manager options
-    max_connections::Int
-    max_connection_idle_in_milliseconds::Int
     decompress::Union{Nothing, Bool}
     status_exception::Bool
+    retry_non_idempotent::Bool
+    verbose::Int
 end
 
-function RequestContext(allocator, bootstrap, request, response, args...)
-    if response.body isa AbstractVector{UInt8} && length(response.body) > 0
-        response_body = IOBuffer(response.body; write=true, maxsize=length(response.body))
-    elseif response.body === nothing
-        response_body = UInt8[]
-        response.body = response_body
-    else
-        response_body = response.body
-    end
-    return RequestContext(allocator, bootstrap, C_NULL, false, Threads.Event(), nothing, request, response, response_body, C_NULL, args...)
+function RequestContext(client, request, response, args...)
+    return RequestContext(client, C_NULL, false, Threads.Event(), nothing, request, response, nothing, false, nothing, C_NULL, C_NULL, args...)
 end
 
 struct StatusError <: Exception
@@ -114,16 +207,16 @@ const ALLOCATOR = Ref{Ptr{Cvoid}}(C_NULL)
 const EVENT_LOOP_GROUP = Ref{Ptr{Cvoid}}(C_NULL)
 const HOST_RESOLVER = Ref{Ptr{Cvoid}}(C_NULL)
 const CLIENT_BOOTSTRAP = Ref{Ptr{Cvoid}}(C_NULL)
-const DEFAULT_SOCKET_OPTIONS = aws_socket_options(
-    AWS_SOCKET_STREAM, # socket type
-    AWS_SOCKET_IPV4, # socket domain
-    3000, # connect_timeout_ms
-    0, # keep_alive_interval_sec
-    0, # keep_alive_timeout_sec
-    0, # keep_alive_max_failed_probes
-    false # keepalive
-)
 const LOGGER = Ref{Ptr{Cvoid}}(C_NULL)
+
+#NOTE: this is global process logging in the aws-crt libraries; not appropriate for request-level
+# logging, but more for debugging the library itself
+function set_log_level!(level::Integer)
+    @assert 0 <= level <= 7 "log level must be between 0 and 7"
+    aws_logger_set_log_level(LOGGER[], aws_log_level(level)) != 0 && aws_throw_error()
+    return
+end
+
 const CONNECTION_MANAGERS = Dict{String, Ptr{aws_http_connection_manager}}()
 
 const USER_AGENT = Ref{Union{String, Nothing}}("HTTP2.jl/$VERSION")
@@ -141,6 +234,7 @@ function setuseragent!(x::Union{String, Nothing})
 end
 
 include("forms.jl"); using .Forms
+include("redirects.jl"); 
 include("client.jl")
 
 function __init__()
@@ -174,6 +268,7 @@ function __init__()
     on_metrics[] = @cfunction(c_on_metrics, Cvoid, (Ptr{Cvoid}, Ptr{StreamMetrics}, Any))
     on_complete[] = @cfunction(c_on_complete, Cvoid, (Ptr{Cvoid}, Cint, Any))
     on_destroy[] = @cfunction(c_on_destroy, Cvoid, (Any,))
+    retry_ready[] = @cfunction(c_retry_ready, Cvoid, (Ptr{Cvoid}, Cint, Any))
     return
 end
 
