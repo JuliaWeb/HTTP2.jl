@@ -1,13 +1,13 @@
 @testset "Client.jl" begin
     isok(r) = r.status == 200
-    @testset "GET, HEAD, POST, PUT, DELETE, PATCH" begin
-        @test isok(HTTP2.get("https://$httpbin/ip"))
-        @test isok(HTTP2.head("https://$httpbin/ip"))
-        @test HTTP2.post("https://$httpbin/patch"; status_exception=false).status == 405
-        @test isok(HTTP2.post("https://$httpbin/post"))
-        @test isok(HTTP2.put("https://$httpbin/put"))
-        @test isok(HTTP2.delete("https://$httpbin/delete"))
-        @test isok(HTTP2.patch("https://$httpbin/patch"))
+    @testset "GET, HEAD, POST, PUT, DELETE, PATCH: $scheme" for scheme in ["http", "https"]
+        @test isok(HTTP2.get("$scheme://$httpbin/ip"))
+        @test isok(HTTP2.head("$scheme://$httpbin/ip"))
+        @test HTTP2.post("$scheme://$httpbin/patch"; status_exception=false).status == 405
+        @test isok(HTTP2.post("$scheme://$httpbin/post"; redirect_method=:same))
+        @test isok(HTTP2.put("$scheme://$httpbin/put"; redirect_method=:same))
+        @test isok(HTTP2.delete("$scheme://$httpbin/delete"; redirect_method=:same))
+        @test isok(HTTP2.patch("$scheme://$httpbin/patch"; redirect_method=:same))
     end
 
     @testset "decompress" begin

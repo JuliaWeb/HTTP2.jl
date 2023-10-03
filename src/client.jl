@@ -1,3 +1,64 @@
+function make_input_stream(ctx)
+    headers = ctx.request.headers
+    input_stream = C_NULL
+    if ctx.request.body !== nothing
+        if ctx.request.body isa AbstractString
+            if ctx.request.body isa String
+                ctx.request_body = unsafe_wrap(Vector{UInt8}, ctx.request.body)
+            else
+                ctx.request_body = Vector{UInt8}(ctx.request.body)
+            end
+            cbody = aws_byte_cursor_from_c_str(ctx.request.body)
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
+        elseif ctx.request.body isa AbstractVector{UInt8}
+            ctx.request_body = ctx.request.body
+            cbody = aws_byte_cursor(sizeof(ctx.request.body), pointer(ctx.request.body))
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
+        elseif ctx.request.body isa Union{AbstractDict, NamedTuple}
+            # add application/x-www-form-urlencoded content-type header if not already present
+            if !hasheader(headers, "content-type")
+                setheader(headers, "content-type", "application/x-www-form-urlencoded")
+            end
+            # hold a reference to the request body in order to gc-preserve it
+            ctx.request_body = unsafe_wrap(Vector{UInt8}, escapeuri(ctx.client.allocator, ctx.request.body))
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, aws_byte_cursor_from_c_str(ctx.request_body))
+        elseif ctx.request.body isa IOStream
+            ctx.request_body = Mmap.mmap(ctx.request.body)
+            input_stream = aws_input_stream_new_from_open_file(ctx.client.allocator, Libc.FILE(ctx.request.body))
+        elseif ctx.request.body isa Form
+            # add multipart content-type header if not already present
+            if !hasheader(headers, "content-type")
+                setheader(headers, "content-type", content_type(ctx.request.body))
+            end
+            # we set the request.body to the Form bytes in order to gc-preserve them
+            ctx.request_body = read(ctx.request.body)
+            cbody = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
+        elseif ctx.request.body isa IO
+            # we set the request.body to the IO bytes in order to gc-preserve them
+            bytes = readavailable(ctx.request.body)
+            while !eof(ctx.request.body)
+                append!(bytes, readavailable(ctx.request.body))
+            end
+            ctx.request_body = bytes
+            cbody = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
+        else
+            throw(ArgumentError("request body must be a string, vector of UInt8, or IO"))
+        end
+        data_len_ref = Ref(0)
+        aws_input_stream_get_length(input_stream, data_len_ref) != 0 && aws_throw_error()
+        data_len = data_len_ref[]
+        if data_len > 0
+            setheader(headers, "content-length", string(data_len))
+        else
+            aws_input_stream_destroy(input_stream)
+            input_stream = C_NULL
+        end
+    end
+    return input_stream
+end
+
 const on_setup = Ref{Ptr{Cvoid}}(C_NULL)
 
 function c_on_setup(conn, error_code, ctx)
@@ -13,37 +74,19 @@ function c_on_setup(conn, error_code, ctx)
         return
     end
     # build request
-    ctx.verbose >= 1 && @info "building request: $(String(ctx.request.uri.host_name))"
+    ctx.verbose >= 1 && @info "building request: $(ctx.request.uri.host)"
     ctx.connection = conn
     protocol_version = aws_http_connection_get_version(conn)
-    request = protocol_version == AWS_HTTP_VERSION_2 ?
-          aws_http2_message_new_request(ctx.client.allocator) :
-          aws_http_message_new_request(ctx.client.allocator)
-    if request == C_NULL
-        ctx.error = CapturedException(aws_error(), Base.backtrace())
-        ctx.should_retry = true
-        Threads.notify(ctx.completed)
-        return
-    end
     # build up request headers
     headers = ctx.request.headers
-    path = ctx.request.uri.path_and_query.len != 0 ? ctx.request.uri.path_and_query : aws_byte_cursor_from_c_str("/")
     if protocol_version == AWS_HTTP_VERSION_2
-        # set method
-        setheader(headers, ":method", ctx.request.method)
-        # set path
-        setheader(headers, ":path", String(path))
         # set scheme
-        setheader(headers, ":scheme", String(ctx.request.uri.scheme))
+        setheader(headers, ":scheme", ctx.request.uri.scheme)
         # set authority
-        setheader(headers, ":authority", String(ctx.request.uri.host_name))
+        setheader(headers, ":authority", ctx.request.uri.host)
     else
-        # set method
-        aws_http_message_set_request_method(request, aws_byte_cursor_from_c_str(ctx.request.method))
-        # set path
-        aws_http_message_set_request_path(request, path)
         # set host
-        setheader(headers, "host", String(ctx.request.uri.host_name))
+        setheader(headers, "host", ctx.request.uri.host)
     end
     # accept header
     if !hasheader(headers, "accept")
@@ -57,60 +100,50 @@ function c_on_setup(conn, error_code, ctx)
     if ctx.decompress === nothing || ctx.decompress
         setheader(headers, "accept-encoding", "gzip")
     end
-    # set body
-    if ctx.request.body !== nothing
-        if ctx.request.body isa AbstractString
-            cbody = aws_byte_cursor_from_c_str(ctx.request.body)
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
-        elseif ctx.request.body isa AbstractVector{UInt8}
-            cbody = aws_byte_cursor(sizeof(ctx.request.body), pointer(ctx.request.body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
-        elseif ctx.request.body isa Union{AbstractDict, NamedTuple}
-            # add application/x-www-form-urlencoded content-type header if not already present
-            if !aws_http_headers_has(aws_http_message_get_headers(request), aws_byte_cursor_from_c_str("content-type"))
-                # "Content-Type" => "application/x-www-form-urlencoded"
-                setheader(headers, "content-type", "application/x-www-form-urlencoded")
+    # process request body if present
+    input_stream = make_input_stream(ctx)
+    # call a user-provided modifier function (if provided)
+    if ctx.modifier !== nothing
+        body_modified = ctx.modifier(ctx.request, ctx.request_body)
+        if body_modified === true
+            if input_stream != C_NULL
+                # destroy previous input_stream
+                aws_input_stream_destroy(input_stream)
             end
-            cbody = aws_byte_cursor_from_c_str(escapeuri(ctx.client.allocator, ctx.request.body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
-        elseif ctx.request.body isa IOStream
-            input_stream = aws_input_stream_new_from_open_file(ctx.client.allocator, Libc.FILE(ctx.request.body))
-        elseif ctx.request.body isa Form
-            # add multipart content-type header if not already present
-            if !aws_http_headers_has(aws_http_message_get_headers(request), aws_byte_cursor_from_c_str("content-type"))
-                # "Content-Type" => "multipart/form-data; boundary=..."
-                setheader(headers, "content-type", content_type(ctx.request.body))
-            end
-            # we set the request.body to the Form bytes in order to gc-preserve them
-            ctx.request.body = read(ctx.request.body)
-            cbody = aws_byte_cursor(sizeof(ctx.request.body), pointer(ctx.request.body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
-        elseif ctx.request.body isa IO
-            # we set the request.body to the IO bytes in order to gc-preserve them
-            bytes = readavailable(ctx.request.body)
-            while !eof(ctx.request.body)
-                append!(bytes, readavailable(ctx.request.body))
-            end
-            ctx.request.body = bytes
-            cbody = aws_byte_cursor(sizeof(ctx.request.body), pointer(ctx.request.body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
-        else
-            throw(ArgumentError("request body must be a string, vector of UInt8, or IO"))
+            input_stream = make_input_stream(ctx)
         end
-        data_len_ref = Ref(0)
-        aws_input_stream_get_length(input_stream, data_len_ref) != 0 && aws_throw_error()
-        data_len = data_len_ref[]
-        if data_len > 0
-            setheader(headers, "content-length", string(data_len))
-            aws_http_message_set_body_stream(request, input_stream)
-        else
-            aws_input_stream_destroy(input_stream)
-        end
+    end
+
+    # prepare C version of request
+    request = protocol_version == AWS_HTTP_VERSION_2 ?
+          aws_http2_message_new_request(ctx.client.allocator) :
+          aws_http_message_new_request(ctx.client.allocator)
+    if request == C_NULL
+        ctx.error = CapturedException(aws_error(), Base.backtrace())
+        ctx.should_retry = true
+        Threads.notify(ctx.completed)
+        return
+    end
+    path = resource(ctx.request.uri)
+    if protocol_version == AWS_HTTP_VERSION_2
+        # set method
+        setheader(headers, ":method", ctx.request.method)
+        # set path
+        setheader(headers, ":path", path)
+    else
+        # set method
+        aws_http_message_set_request_method(request, aws_byte_cursor_from_c_str(ctx.request.method))
+        # set path
+        aws_http_message_set_request_path(request, aws_byte_cursor_from_c_str(path))
     end
     # add headers to request
     for (k, v) in headers
         header = aws_http_header(aws_byte_cursor_from_c_str(string(k)), aws_byte_cursor_from_c_str(string(v)), AWS_HTTP_HEADER_COMPRESSION_USE_CACHE)
         aws_http_message_add_header(request, header)
+    end
+    # set body from input_stream if present
+    if input_stream != C_NULL
+        aws_http_message_set_body_stream(request, input_stream)
     end
 
     final_request = aws_http_make_request_options(request, ctx)
@@ -126,7 +159,7 @@ function c_on_setup(conn, error_code, ctx)
     # this schedules our request to be written over the wire
     # our various on_response_X callbacks will be called as the response is received
     ctx.verbose >= 3 && print_request(stdout, ctx.request.method, String(path), headers, something(ctx.request.body, UInt8[]))
-    ctx.verbose >= 1 && @info "activating stream: $(String(ctx.request.uri.host_name))"
+    ctx.verbose >= 1 && @info "activating stream: $(ctx.request.uri.host)"
     aws_http_stream_activate(stream)
     return
 end
@@ -189,12 +222,12 @@ function c_on_response_header_block_done(stream, header_block, ctx)
         response_body
     end
     # if we might retry, we store the error response body in a temporary buffer
-    if ctx.error !== nothing && ctx.should_retry
+    if ctx.error !== nothing
         ctx.error_response_body = response_body
     else
         ctx.response.body = response_body
     end
-    ctx.verbose >= 1 && @info "response headers received: $(String(ctx.request.uri.host_name))"
+    ctx.verbose >= 1 && @info "response headers received: $(ctx.request.uri.host)"
     return Cint(0)
 end
 
@@ -228,7 +261,7 @@ function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx)
     else
         unsafe_write(body, bc.ptr, bc.len)
     end
-    ctx.verbose >= 1 && @info "response body received: $(String(ctx.request.uri.host_name))"
+    ctx.verbose >= 1 && @info "response body received: $(ctx.request.uri.host)"
     return Cint(0)
 end
 
@@ -269,7 +302,7 @@ request(method, url, h=Header[], b::RequestBodyTypes=nothing; allocator=ALLOCATO
 # main entrypoint for making an HTTP request
 # can provide method, url, headers, body, along with various keyword arguments
 function request(req::Request;
-    client::Client=getclient((String(req.uri.host_name), req.uri.port)),
+    client::Union{Nothing, Client}=nothing,
     # redirect options
     redirect=true,
     redirect_limit=3,
@@ -280,15 +313,20 @@ function request(req::Request;
     decompress::Union{Nothing, Bool}=nothing,
     status_exception::Bool=true,
     retry_non_idempotent::Bool=false,
+    modifier=nothing,
     verbose=0,
+    # NOTE: new keywords must also be added to the @client macro definition below
 )
 
+    verbose >= 1 && @info "getting client: $(req.uri.scheme), $(req.uri.host), $(req._uri.port)"
+    client = something(client, getclient((req.uri.scheme, req.uri.host, req._uri.port)))::Client
     # create a request context for shared state that we pass between all the callbacks
-    ctx = RequestContext(client, req, Response(response_body), decompress, status_exception, retry_non_idempotent, verbose)
+    ctx = RequestContext(client, req, Response(response_body), decompress, status_exception, retry_non_idempotent, modifier, verbose)
 
     # NOTE: this is threadsafe based on our usage of the "standard retry strategy" default aws implementation
-    verbose >= 1 && @info "acquiring retry token: $(String(req.uri.host_name))"
-    if aws_retry_strategy_acquire_retry_token(client.retry_strategy, req.uri.host_name, on_acquired[], ctx, client.retry_timeout_ms) != 0
+@label acquire_retry_token
+    verbose >= 1 && @info "acquiring retry token: $(req.uri.host)"
+    if aws_retry_strategy_acquire_retry_token(client.retry_strategy, req._uri.host_name, on_acquired[], ctx, client.retry_timeout_ms) != 0
         ctx.error = CapturedException(aws_error(), Base.backtrace())
         @goto error_fail
     end
@@ -304,11 +342,14 @@ function request(req::Request;
             ctx.error = nothing
             ctx.should_retry = false
             reset(ctx.completed)
-            old_host = String(ctx.request.uri.host_name)
-            new_url = resolvereference(URI(ctx.request.uri), getheader(ctx.response.headers, "location"))
-            ctx.request.uri = aws_uri(new_url, client.allocator)
+            old_host = ctx.request.uri.host
+            ctx.request.uri = resolvereference(ctx.request.uri, getheader(ctx.response.headers, "location"))
+            ctx.request._uri = aws_uri(ctx.request.uri, client.allocator)
             ctx.request.method = newmethod(ctx.request.method, ctx.response.status, redirect_method)
-            verbose >= 2 && @info "redirecting to $(string(new_url)) with method: $(String(ctx.request.method))"
+            verbose >= 1 && @info "getting redirect client: $(ctx.request.uri.scheme), $(ctx.request.uri.host), $(ctx.request._uri.port)"
+            old_client = ctx.client
+            ctx.client = getclient((ctx.request.uri.scheme, ctx.request.uri.host, ctx.request._uri.port))
+            verbose >= 2 && @info "redirecting to $(string(ctx.request.uri)) with method: $(String(ctx.request.method))"
             if ctx.request.method == "GET"
                 ctx.request.body = UInt8[]
             end
@@ -317,7 +358,7 @@ function request(req::Request;
                     # false return values are filtered out
                     if header == "Host"
                         return false
-                    elseif (header in SENSITIVE_HEADERS && !isdomainorsubdomain(ctx.request.uri.host_name, old_host))
+                    elseif (header in SENSITIVE_HEADERS && !isdomainorsubdomain(ctx.request.uri.host, old_host))
                         return false
                     elseif ctx.request.method == "GET" && (ascii_lc_isequal(header, "content-type") || ascii_lc_isequal(header, "content-length"))
                         return false
@@ -334,31 +375,42 @@ function request(req::Request;
             # that means redirects count against your retries...
             # but also not sure we should be doing multiple requests w/ the same
             # retry token without recording success/scheduling a retry
-            verbose >= 1 && @info "scheduling redirect retry: $(String(ctx.request.uri.host_name))"
-            if aws_retry_strategy_schedule_retry(
-                ctx.retry_token,
-                error_type,
-                retry_ready[],
-                ctx
-            ) != 0
-                ctx.error = CapturedException(aws_error(), Base.backtrace())
-                @goto error_fail
+            if old_client != ctx.client
+                aws_retry_token_record_success(ctx.retry_token)
+                aws_retry_token_release(ctx.retry_token)
+                @goto acquire_retry_token
+            else
+                verbose >= 1 && @info "scheduling redirect retry: $(ctx.request.uri.host)"
+                if aws_retry_strategy_schedule_retry(
+                    ctx.retry_token,
+                    error_type,
+                    retry_ready[],
+                    ctx
+                ) != 0
+                    ctx.error = CapturedException(aws_error(), Base.backtrace())
+                    @goto error_fail
+                end
+                @goto request_wait
             end
-            @goto request_wait
         end
     elseif ctx.error !== nothing && ctx.should_retry
         ctx.error = nothing
         ctx.should_retry = false
         reset(ctx.completed)
         empty!(ctx.response.headers)
-        verbose >= 1 && @info "scheduling error retry: $(String(ctx.request.uri.host_name))"
-        if aws_retry_strategy_schedule_retry(
+        verbose >= 1 && @info "scheduling error retry: $(ctx.request.uri.host)"
+        ret = aws_retry_strategy_schedule_retry(
             ctx.retry_token,
             error_type,
             retry_ready[],
             ctx
-        ) != 0
-            ctx.error = CapturedException(aws_error(), Base.backtrace())
+        )
+        if ret != 0
+            # NOTE: we're manually creating an AWSError here because calling aws_error
+            # doesn't return anything useful, even though from the source code it should?
+            # we're also not seeing any logs from retry strategy code, so it seems like something
+            # isn't working quite right with the integration there
+            ctx.error = CapturedException(AWSError("scheduling retry failed: $(ctx.request.uri.host)"), Base.backtrace())
             @goto error_fail
         end
         @goto request_wait
@@ -395,6 +447,7 @@ function c_retry_ready(token::Ptr{aws_retry_token}, error_code::Cint, ctx)
         Threads.notify(ctx.completed)
         return
     end
+    ctx.verbose >= 2 && @info "retry ready: $(ctx.request.uri.host)"
     c_on_acquired(C_NULL, 0, token, ctx)
     return
 end
@@ -410,7 +463,7 @@ function c_on_acquired(retry_strategy, error_code, retry_token::Ptr{aws_retry_to
     end
     ctx.retry_token = retry_token
     #NOTE: this is threadsafe based on our usage of the default aws connection manager implementation
-    ctx.verbose >= 2 && @info "acquired retry token, acquiring connection: $(String(ctx.request.uri.host_name))"
+    ctx.verbose >= 2 && @info "acquired retry token, acquiring connection: $(ctx.request.uri.host)"
     aws_http_connection_manager_acquire_connection(ctx.client.connection_manager, on_setup[], ctx)
 end
 
@@ -421,3 +474,42 @@ delete(a...; kw...) = request("DELETE", a...; kw...)
 patch(a...; kw...) = request("PATCH", a...; kw...)
 head(a...; kw...) = request("HEAD", a...; kw...)
 options(a...; kw...) = request("OPTIONS", a...; kw...)
+
+macro remove_linenums!(expr)
+    return esc(Base.remove_linenums!(expr))
+end
+
+macro client(modifier)
+    return @remove_linenums! esc(quote
+        get(a...; kw...) = ($__source__; request("GET", a...; kw...))
+        put(a...; kw...) = ($__source__; request("PUT", a...; kw...))
+        post(a...; kw...) = ($__source__; request("POST", a...; kw...))
+        patch(a...; kw...) = ($__source__; request("PATCH", a...; kw...))
+        head(a...; kw...) = ($__source__; request("HEAD", a...; kw...))
+        delete(a...; kw...) = ($__source__; request("DELETE", a...; kw...))
+        options(a...; kw...) = ($__source__; request("OPTIONS", a...; kw...))
+        # open(f, a...; kw...) = ($__source__; request(a...; iofunction=f, kw...))
+        function request(method, url, h=HTTP2.Header[], b::HTTP2.RequestBodyTypes=nothing;
+            allocator=HTTP2.ALLOCATOR[],
+            headers=h,
+            body::HTTP2.RequestBodyTypes=b,
+            client::Union{Nothing, HTTP2.Client}=nothing,
+            # redirect options
+            redirect=true,
+            redirect_limit=3,
+            redirect_method=nothing,
+            forwardheaders=true,
+            # response options
+            response_body=nothing,
+            decompress::Union{Nothing, Bool}=nothing,
+            status_exception::Bool=true,
+            retry_non_idempotent::Bool=false,
+            modifier=nothing,
+            verbose=0,
+            kw...)
+            $__source__
+            HTTP2.request(HTTP2.Request(method, url, headers, body, allocator); modifier=$modifier(; kw...),
+                client, redirect, redirect_limit, redirect_method, forwardheaders, response_body, decompress, status_exception, retry_non_idempotent, verbose)
+        end
+    end)
+end

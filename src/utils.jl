@@ -30,6 +30,17 @@ function setheader(h, k, v)
     return
 end
 
+function deleteheader(h, k)
+    i = findfirst(x -> ascii_lc_isequal(x.first, k), h)
+    i === nothing && return
+    deleteat!(h, i)
+    return
+end
+
+resource(uri::URI) = string( isempty(uri.path)     ? "/" :     uri.path,
+                            !isempty(uri.query)    ? "?" : "", uri.query,
+                            !isempty(uri.fragment) ? "#" : "", uri.fragment)
+
 function print_request(io, method, path, headers, body)
     write(io, "\"\"\"\n")
     write(io, string(method, " ", path, " HTTP/1.1\r\n"))

@@ -1,9 +1,7 @@
 module HTTP2
 
-using CodecZlibNG, URIs
-
-const libawscrt = "/Users/quinnj/aws-crt/lib/libaws-c-http"
-const libawsio = "/Users/quinnj/aws-crt/lib/libaws-c-io"
+using CodecZlibNG, URIs, Mmap
+using aws_c_http_jll, aws_c_io_jll
 
 include("utils.jl")
 include("c.jl")
@@ -12,14 +10,21 @@ const RequestBodyTypes = Union{AbstractString, AbstractVector{UInt8}, IO, Abstra
 
 mutable struct Request
     method::String
-    uri::aws_uri
+    uri::URI
+    _uri::aws_uri
     headers::Headers
     body::RequestBodyTypes
+
+    function Request(method::AbstractString, url::AbstractString, headers, body::RequestBodyTypes, allocator::Ptr{aws_allocator})
+        _uri = aws_uri(String(url), allocator)
+        return new(String(method), URI(_uri), _uri, something(headers, Header[]), body)
+    end
 end
 
-Request(method, url, headers, body, allocator) =
-    Request(method, aws_uri(url, allocator), something(headers, Header[]), body)
-
+#TODO: make a RequestMetrics that includes:
+# request/response body sizes
+# # of retries
+# stream metrics
 struct StreamMetrics
     send_start_timestamp_ns::Int64
     send_end_timestamp_ns::Int64
@@ -42,14 +47,15 @@ Response(body=UInt8[]) = Response(0, Header[], body, nothing)
 # we use finalizers only because Clients are meant to be global consts and never
 # short-lived, temporary objects that should clean themselves up efficiently
 mutable struct Client
-    host::String
+    scheme::SubString{String}
+    host::SubString{String}
     port::UInt16
     allocator::Ptr{aws_allocator}
     retry_strategy::Ptr{Cvoid}
     retry_timeout_ms::Int
     connection_manager::Ptr{Cvoid}
 
-    function Client(host::String, port::UInt16;
+    function Client(scheme::SubString{String}, host::SubString{String}, port::UInt16;
         allocator=ALLOCATOR[],
         bootstrap=CLIENT_BOOTSTRAP[],
         event_loop_group=EVENT_LOOP_GROUP[], # this should probably default to the elg from bootstrap
@@ -102,44 +108,53 @@ mutable struct Client
         tls_ctx_options = aws_mem_acquire(allocator, 512)
         tls_ctx = C_NULL
         connection_manager = C_NULL
+        host_str = String(host)
         try
-            if ssl_cert !== nothing && ssl_key !== nothing
-                aws_tls_ctx_options_init_client_mtls_from_path(tls_ctx_options, allocator, ssl_cert, ssl_key) != 0 && aws_throw_error()
-            elseif Sys.iswindows() && ssl_cert !== nothing && ssl_key === nothing
-                aws_tls_ctx_options_init_client_mtls_from_system_path(tls_ctx_options, allocator, ssl_cert) != 0 && aws_throw_error()
+            if scheme == "https" || scheme == "wss"
+                if ssl_cert !== nothing && ssl_key !== nothing
+                    aws_tls_ctx_options_init_client_mtls_from_path(tls_ctx_options, allocator, ssl_cert, ssl_key) != 0 && aws_throw_error()
+                elseif Sys.iswindows() && ssl_cert !== nothing && ssl_key === nothing
+                    aws_tls_ctx_options_init_client_mtls_from_system_path(tls_ctx_options, allocator, ssl_cert) != 0 && aws_throw_error()
+                else
+                    aws_tls_ctx_options_init_default_client(tls_ctx_options, allocator)
+                end
+                if ssl_capath !== nothing && ssl_cacert !== nothing
+                    aws_tls_ctx_options_override_default_trust_store_from_path(tls_ctx_options, ssl_capath, ssl_cacert) != 0 && aws_throw_error()
+                end
+                if ssl_insecure
+                    aws_tls_ctx_options_set_verify_peer(tls_ctx_options, false)
+                end
+                aws_tls_ctx_options_set_alpn_list(tls_ctx_options, ssl_alpn_list) != 0 && aws_throw_error()
+                tls_ctx = aws_tls_client_ctx_new(allocator, tls_ctx_options)
+                tls_ctx == C_NULL && aws_throw_error()
+                aws_tls_connection_options_init_from_ctx(tls_options, tls_ctx)
+                aws_tls_connection_options_set_server_name(tls_options, allocator, aws_byte_cursor_from_c_str(host_str)) != 0 && aws_throw_error()
             else
-                aws_tls_ctx_options_init_default_client(tls_ctx_options, allocator)
+                aws_mem_release(allocator, tls_options)
+                aws_mem_release(allocator, tls_ctx_options)
+                tls_options = C_NULL
             end
-            if ssl_capath !== nothing && ssl_cacert !== nothing
-                aws_tls_ctx_options_override_default_trust_store_from_path(tls_ctx_options, ssl_capath, ssl_cacert) != 0 && aws_throw_error()
-            end
-            if ssl_insecure
-                aws_tls_ctx_options_set_verify_peer(tls_ctx_options, false)
-            end
-            aws_tls_ctx_options_set_alpn_list(tls_ctx_options, ssl_alpn_list) != 0 && aws_throw_error()
-            tls_ctx = aws_tls_client_ctx_new(allocator, tls_ctx_options)
-            tls_ctx == C_NULL && aws_throw_error()
-            aws_tls_connection_options_init_from_ctx(tls_options, tls_ctx)
-            aws_tls_connection_options_set_server_name(tls_options, allocator, aws_byte_cursor_from_c_str(host)) != 0 && aws_throw_error()
             http_connection_manager_options = aws_http_connection_manager_options(
                 bootstrap,
                 socket_options,
                 tls_options,
-                aws_byte_cursor_from_c_str(host),
+                aws_byte_cursor_from_c_str(host_str),
                 port,
                 max_connections,
                 max_connection_idle_in_milliseconds
             )
             connection_manager = aws_http_connection_manager_new(allocator, http_connection_manager_options)
         finally
-            aws_tls_connection_options_clean_up(tls_options)
-            aws_tls_ctx_options_clean_up(tls_ctx_options)
-            aws_tls_ctx_release(tls_ctx)
-            aws_mem_release(allocator, tls_options)
-            aws_mem_release(allocator, tls_ctx_options)
+            if scheme == "https" || scheme == "wss"
+                aws_tls_connection_options_clean_up(tls_options)
+                aws_tls_ctx_options_clean_up(tls_ctx_options)
+                aws_tls_ctx_release(tls_ctx)
+                aws_mem_release(allocator, tls_options)
+                aws_mem_release(allocator, tls_ctx_options)
+            end
         end
         connection_manager == C_NULL && aws_throw_error()
-        client = new(host, port, allocator, retry_strategy, retry_timeout_ms, connection_manager)
+        client = new(scheme, host, port, allocator, retry_strategy, retry_timeout_ms, connection_manager)
         finalizer(client) do x
             if x.connection_manager != C_NULL
                 aws_http_connection_manager_release(x.connection_manager)
@@ -156,14 +171,14 @@ end
 
 struct Clients
     lock::ReentrantLock
-    clients::Dict{Tuple{String, UInt16}, Client}
+    clients::Dict{Tuple{SubString{String}, SubString{String}, UInt16}, Client}
 end
 
-Clients() = Clients(ReentrantLock(), Dict{Tuple{String, UInt16}, Client}())
+Clients() = Clients(ReentrantLock(), Dict{Tuple{SubString{String}, SubString{String}, UInt16}, Client}())
 
 const CLIENTS = Clients()
 
-function getclient(key::Tuple{String, UInt16})
+function getclient(key::Tuple{SubString{String}, SubString{String}, UInt16})
     Base.@lock CLIENTS.lock begin
         if haskey(CLIENTS.clients, key)
             return CLIENTS.clients[key]
@@ -182,6 +197,7 @@ mutable struct RequestContext
     completed::Threads.Event
     error::Union{Nothing, Exception}
     request::Request
+    request_body::Any
     response::Response
     temp_response_body::Any
     gzip_decompressing::Bool
@@ -191,11 +207,12 @@ mutable struct RequestContext
     decompress::Union{Nothing, Bool}
     status_exception::Bool
     retry_non_idempotent::Bool
+    modifier::Any # f(::Request) -> Nothing
     verbose::Int
 end
 
 function RequestContext(client, request, response, args...)
-    return RequestContext(client, C_NULL, false, Threads.Event(), nothing, request, response, nothing, false, nothing, C_NULL, C_NULL, args...)
+    return RequestContext(client, C_NULL, false, Threads.Event(), nothing, request, nothing, response, nothing, false, nothing, C_NULL, C_NULL, args...)
 end
 
 struct StatusError <: Exception
@@ -216,8 +233,6 @@ function set_log_level!(level::Integer)
     aws_logger_set_log_level(LOGGER[], aws_log_level(level)) != 0 && aws_throw_error()
     return
 end
-
-const CONNECTION_MANAGERS = Dict{String, Ptr{aws_http_connection_manager}}()
 
 const USER_AGENT = Ref{Union{String, Nothing}}("HTTP2.jl/$VERSION")
 
