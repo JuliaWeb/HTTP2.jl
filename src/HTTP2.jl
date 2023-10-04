@@ -269,7 +269,7 @@ function __init__()
     @assert CLIENT_BOOTSTRAP[] != C_NULL
     # initialize logger
     LOGGER[] = aws_mem_acquire(ALLOCATOR[], 64)
-    log_options = aws_logger_standard_options(0, Libc.FILE(Libc.RawFD(1), "r+"))
+    log_options = aws_logger_standard_options(0, Libc.FILE(Libc.RawFD(1), "w"))
     aws_logger_init_standard(LOGGER[], ALLOCATOR[], log_options) != 0 && aws_throw_error()
     aws_logger_set(LOGGER[])
     # intialize http library
