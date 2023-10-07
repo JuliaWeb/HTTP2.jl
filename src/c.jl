@@ -154,27 +154,27 @@ end
 const aws_allocator = Cvoid
 
 function aws_default_allocator()
-    ccall((:aws_default_allocator, libaws_c_http), Ptr{aws_allocator}, ())
+    ccall((:aws_default_allocator, libaws_c_common), Ptr{aws_allocator}, ())
 end
 
 function aws_mem_calloc(allocator, num, size)
-    ccall((:aws_mem_calloc, libaws_c_http), Ptr{Cvoid}, (Ptr{aws_allocator}, Csize_t, Csize_t), allocator, num, size)
+    ccall((:aws_mem_calloc, libaws_c_common), Ptr{Cvoid}, (Ptr{aws_allocator}, Csize_t, Csize_t), allocator, num, size)
 end
 
 function aws_mem_acquire(allocator, size)
-    ccall((:aws_mem_acquire, libaws_c_http), Ptr{Cvoid}, (Ptr{aws_allocator}, Csize_t), allocator, size)
+    ccall((:aws_mem_acquire, libaws_c_common), Ptr{Cvoid}, (Ptr{aws_allocator}, Csize_t), allocator, size)
 end
 
 function aws_mem_release(allocator, ptr)
-    ccall((:aws_mem_release, libaws_c_http), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), allocator, ptr)
+    ccall((:aws_mem_release, libaws_c_common), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}), allocator, ptr)
 end
 
 function aws_last_error()
-    ccall((:aws_last_error, libaws_c_http), Cint, ())
+    ccall((:aws_last_error, libaws_c_common), Cint, ())
 end
 
 function aws_error_debug_str(err)
-    ccall((:aws_error_debug_str, libaws_c_http), Ptr{Cchar}, (Cint,), err)
+    ccall((:aws_error_debug_str, libaws_c_common), Ptr{Cchar}, (Cint,), err)
 end
 
 struct AWSError <: Exception
@@ -206,15 +206,15 @@ end
 aws_logger_standard_options(level, file) = aws_logger_standard_options(aws_log_level(level), C_NULL, file)
 
 function aws_logger_set_log_level(logger, level)
-    ccall((:aws_logger_set_log_level, libaws_c_http), Cint, (Ptr{aws_logger}, aws_log_level), logger, level)
+    ccall((:aws_logger_set_log_level, libaws_c_common), Cint, (Ptr{aws_logger}, aws_log_level), logger, level)
 end
 
 function aws_logger_init_standard(logger, allocator, options)
-    ccall((:aws_logger_init_standard, libaws_c_http), Cint, (Ptr{aws_logger}, Ptr{aws_allocator}, Ref{aws_logger_standard_options}), logger, allocator, options)
+    ccall((:aws_logger_init_standard, libaws_c_common), Cint, (Ptr{aws_logger}, Ptr{aws_allocator}, Ref{aws_logger_standard_options}), logger, allocator, options)
 end
 
 function aws_logger_set(logger)
-    ccall((:aws_logger_set, libaws_c_http), Cvoid, (Ptr{aws_logger},), logger)
+    ccall((:aws_logger_set, libaws_c_common), Cvoid, (Ptr{aws_logger},), logger)
 end
 
 function aws_http_library_init(alloc)
@@ -230,31 +230,31 @@ aws_byte_cursor() = aws_byte_cursor(0, C_NULL)
 Base.String(cursor::aws_byte_cursor) = cursor.ptr == C_NULL ? "" : unsafe_string(cursor.ptr, cursor.len)
 
 function aws_byte_cursor_from_c_str(c_str)
-    ccall((:aws_byte_cursor_from_c_str, libaws_c_http), aws_byte_cursor, (Ptr{Cchar},), c_str)
+    ccall((:aws_byte_cursor_from_c_str, libaws_c_common), aws_byte_cursor, (Ptr{Cchar},), c_str)
 end
 
 Base.convert(::Type{aws_byte_cursor}, x::Union{aws_byte_cursor, AbstractString}) = x isa aws_byte_cursor ? x : aws_byte_cursor_from_c_str(x)
 
 function aws_byte_cursor_from_array(bytes, len)
-    ccall((:aws_byte_cursor_from_array, libaws_c_http), aws_byte_cursor, (Ptr{Cvoid}, Csize_t), bytes, len)
+    ccall((:aws_byte_cursor_from_array, libaws_c_common), aws_byte_cursor, (Ptr{Cvoid}, Csize_t), bytes, len)
 end
 
 function aws_byte_cursor_eq(a, b)
-    ccall((:aws_byte_cursor_eq, libaws_c_http), Bool, (Ptr{aws_byte_cursor}, Ptr{aws_byte_cursor}), a, b)
+    ccall((:aws_byte_cursor_eq, libaws_c_common), Bool, (Ptr{aws_byte_cursor}, Ptr{aws_byte_cursor}), a, b)
 end
 
 function aws_byte_cursor_eq_c_str_ignore_case(cursor, c_str)
-    ccall((:aws_byte_cursor_eq_c_str_ignore_case, libaws_c_http), Bool, (Ref{aws_byte_cursor}, Ptr{Cchar}), cursor, c_str)
+    ccall((:aws_byte_cursor_eq_c_str_ignore_case, libaws_c_common), Bool, (Ref{aws_byte_cursor}, Ptr{Cchar}), cursor, c_str)
 end
 
 function aws_byte_cursor_eq_ignore_case(a, b)
-    ccall((:aws_byte_cursor_eq_ignore_case, libaws_c_http), Bool, (Ref{aws_byte_cursor}, Ref{aws_byte_cursor}), a, b)
+    ccall((:aws_byte_cursor_eq_ignore_case, libaws_c_common), Bool, (Ref{aws_byte_cursor}, Ref{aws_byte_cursor}), a, b)
 end
 
 Base.isempty(cursor::aws_byte_cursor) = cursor.len == 0
 
 function aws_hash_byte_cursor_ptr_ignore_case(item)
-    ccall((:aws_hash_byte_cursor_ptr_ignore_case, libaws_c_http), UInt64, (Ref{aws_byte_cursor},), item)
+    ccall((:aws_hash_byte_cursor_ptr_ignore_case, libaws_c_common), UInt64, (Ref{aws_byte_cursor},), item)
 end
 
 Base.hash(cursor::aws_byte_cursor, h::UInt64) = aws_hash_byte_cursor_ptr_ignore_case(cursor)
@@ -262,19 +262,19 @@ Base.hash(cursor::aws_byte_cursor, h::UInt64) = aws_hash_byte_cursor_ptr_ignore_
 const aws_input_stream = Cvoid
 
 function aws_input_stream_new_from_cursor(allocator, cursor)
-    ccall((:aws_input_stream_new_from_cursor, libaws_c_http), Ptr{aws_input_stream}, (Ptr{aws_allocator}, Ref{aws_byte_cursor}), allocator, cursor)
+    ccall((:aws_input_stream_new_from_cursor, libaws_c_io), Ptr{aws_input_stream}, (Ptr{aws_allocator}, Ref{aws_byte_cursor}), allocator, cursor)
 end
 
 function aws_input_stream_new_from_open_file(allocator, file)
-    ccall((:aws_input_stream_new_from_open_file, libaws_c_http), Ptr{aws_input_stream}, (Ptr{aws_allocator}, Ptr{Libc.FILE}), allocator, file)
+    ccall((:aws_input_stream_new_from_open_file, libaws_c_io), Ptr{aws_input_stream}, (Ptr{aws_allocator}, Ptr{Libc.FILE}), allocator, file)
 end
 
 function aws_input_stream_get_length(stream, out_length)
-    ccall((:aws_input_stream_get_length, libaws_c_http), Cint, (Ptr{aws_input_stream}, Ptr{Int64}), stream, out_length)
+    ccall((:aws_input_stream_get_length, libaws_c_io), Cint, (Ptr{aws_input_stream}, Ptr{Int64}), stream, out_length)
 end
 
 function aws_input_stream_destroy(stream)
-    ccall((:aws_input_stream_destroy, libaws_c_http), Cvoid, (Ptr{aws_input_stream},), stream)
+    ccall((:aws_input_stream_destroy, libaws_c_io), Cvoid, (Ptr{aws_input_stream},), stream)
 end
 
 struct aws_byte_buf
@@ -328,17 +328,17 @@ function URIs.URI(url::aws_uri)
 end
 
 function aws_uri_init_parse(uri, allocator, uri_str)
-    ccall((:aws_uri_init_parse, libaws_c_http), Cint, (Ref{aws_uri}, Ptr{aws_allocator}, Ref{aws_byte_cursor}), uri, allocator, uri_str)
+    ccall((:aws_uri_init_parse, libaws_c_common), Cint, (Ref{aws_uri}, Ptr{aws_allocator}, Ref{aws_byte_cursor}), uri, allocator, uri_str)
 end
 
 function aws_uri_clean_up(uri)
-    ccall((:aws_uri_clean_up, libaws_c_http), Cvoid, (Ref{aws_uri},), uri)
+    ccall((:aws_uri_clean_up, libaws_c_common), Cvoid, (Ref{aws_uri},), uri)
 end
 
 const aws_event_loop_group = Cvoid
 
 function aws_event_loop_group_new_default(alloc, max_threads, shutdown_options)
-    ccall((:aws_event_loop_group_new_default, libaws_c_http), Ptr{aws_event_loop_group}, (Ptr{aws_allocator}, UInt16, Ptr{Cvoid}), alloc, max_threads, shutdown_options)
+    ccall((:aws_event_loop_group_new_default, libaws_c_io), Ptr{aws_event_loop_group}, (Ptr{aws_allocator}, UInt16, Ptr{Cvoid}), alloc, max_threads, shutdown_options)
 end
 
 const aws_shutdown_callback_options = Cvoid
@@ -353,7 +353,7 @@ end
 const aws_host_resolver = Cvoid
 
 function aws_host_resolver_new_default(allocator, options)
-    ccall((:aws_host_resolver_new_default, libaws_c_http), Ptr{aws_host_resolver}, (Ptr{aws_allocator}, Ref{aws_host_resolver_default_options}), allocator, options)
+    ccall((:aws_host_resolver_new_default, libaws_c_io), Ptr{aws_host_resolver}, (Ptr{aws_allocator}, Ref{aws_host_resolver_default_options}), allocator, options)
 end
 
 struct aws_client_bootstrap_options
@@ -367,7 +367,7 @@ end
 const aws_client_bootstrap = Cvoid
 
 function aws_client_bootstrap_new(allocator, options)
-    ccall((:aws_client_bootstrap_new, libaws_c_http), Ptr{aws_client_bootstrap}, (Ptr{aws_allocator}, Ref{aws_client_bootstrap_options}), allocator, options)
+    ccall((:aws_client_bootstrap_new, libaws_c_io), Ptr{aws_client_bootstrap}, (Ptr{aws_allocator}, Ref{aws_client_bootstrap_options}), allocator, options)
 end
 
 @enum aws_socket_type::UInt32 begin
@@ -404,51 +404,51 @@ const aws_tls_ctx = Cvoid
 const aws_tls_connection_options = Cvoid
 
 function aws_tls_connection_options_init_from_ctx(conn_options, ctx)
-    ccall((:aws_tls_connection_options_init_from_ctx, libaws_c_http), Cvoid, (Ref{aws_tls_connection_options}, Ptr{aws_tls_ctx}), conn_options, ctx)
+    ccall((:aws_tls_connection_options_init_from_ctx, libaws_c_io), Cvoid, (Ref{aws_tls_connection_options}, Ptr{aws_tls_ctx}), conn_options, ctx)
 end
 
 function aws_tls_client_ctx_new(alloc, options)
-    ccall((:aws_tls_client_ctx_new, libaws_c_http), Ptr{aws_tls_ctx}, (Ptr{aws_allocator}, Ptr{aws_tls_ctx_options}), alloc, options)
+    ccall((:aws_tls_client_ctx_new, libaws_c_io), Ptr{aws_tls_ctx}, (Ptr{aws_allocator}, Ptr{aws_tls_ctx_options}), alloc, options)
 end
 
 function aws_tls_ctx_options_init_client_mtls_from_path(options, allocator, cert_path, pkey_path)
-    ccall((:aws_tls_ctx_options_init_client_mtls_from_path, libaws_c_http), Cint, (Ptr{aws_tls_ctx_options}, Ptr{aws_allocator}, Ptr{Cchar}, Ptr{Cchar}), options, allocator, cert_path, pkey_path)
+    ccall((:aws_tls_ctx_options_init_client_mtls_from_path, libaws_c_io), Cint, (Ptr{aws_tls_ctx_options}, Ptr{aws_allocator}, Ptr{Cchar}, Ptr{Cchar}), options, allocator, cert_path, pkey_path)
 end
 
 function aws_tls_ctx_options_init_client_mtls_from_system_path(options, allocator, cert_reg_path)
-    ccall((:aws_tls_ctx_options_init_client_mtls_from_system_path, libaws_c_http), Cint, (Ptr{aws_tls_ctx_options}, Ptr{aws_allocator}, Ptr{Cchar}), options, allocator, cert_reg_path)
+    ccall((:aws_tls_ctx_options_init_client_mtls_from_system_path, libaws_c_io), Cint, (Ptr{aws_tls_ctx_options}, Ptr{aws_allocator}, Ptr{Cchar}), options, allocator, cert_reg_path)
 end
 
 function aws_tls_ctx_options_override_default_trust_store_from_path(options, ca_path, ca_file)
-    ccall((:aws_tls_ctx_options_override_default_trust_store_from_path, libaws_c_http), Cint, (Ptr{aws_tls_ctx_options}, Ptr{Cchar}, Ptr{Cchar}), options, ca_path, ca_file)
+    ccall((:aws_tls_ctx_options_override_default_trust_store_from_path, libaws_c_io), Cint, (Ptr{aws_tls_ctx_options}, Ptr{Cchar}, Ptr{Cchar}), options, ca_path, ca_file)
 end
 
 function aws_tls_ctx_options_init_default_client(options, allocator)
-    ccall((:aws_tls_ctx_options_init_default_client, libaws_c_http), Cvoid, (Ptr{aws_tls_ctx_options}, Ptr{aws_allocator}), options, allocator)
+    ccall((:aws_tls_ctx_options_init_default_client, libaws_c_io), Cvoid, (Ptr{aws_tls_ctx_options}, Ptr{aws_allocator}), options, allocator)
 end
 
 function aws_tls_ctx_options_set_alpn_list(options, alpn_list)
-    ccall((:aws_tls_ctx_options_set_alpn_list, libaws_c_http), Cint, (Ptr{aws_tls_ctx_options}, Ptr{Cchar}), options, alpn_list)
+    ccall((:aws_tls_ctx_options_set_alpn_list, libaws_c_io), Cint, (Ptr{aws_tls_ctx_options}, Ptr{Cchar}), options, alpn_list)
 end
 
 function aws_tls_ctx_options_set_verify_peer(options, verify_peer)
-    ccall((:aws_tls_ctx_options_set_verify_peer, libaws_c_http), Cvoid, (Ptr{aws_tls_ctx_options}, Bool), options, verify_peer)
+    ccall((:aws_tls_ctx_options_set_verify_peer, libaws_c_io), Cvoid, (Ptr{aws_tls_ctx_options}, Bool), options, verify_peer)
 end
 
 function aws_tls_connection_options_set_server_name(conn_options, allocator, server_name)
-    ccall((:aws_tls_connection_options_set_server_name, libaws_c_http), Cint, (Ptr{aws_tls_connection_options}, Ptr{aws_allocator}, Ref{aws_byte_cursor}), conn_options, allocator, server_name)
+    ccall((:aws_tls_connection_options_set_server_name, libaws_c_io), Cint, (Ptr{aws_tls_connection_options}, Ptr{aws_allocator}, Ref{aws_byte_cursor}), conn_options, allocator, server_name)
 end
 
 function aws_tls_connection_options_clean_up(connection_options)
-    ccall((:aws_tls_connection_options_clean_up, libaws_c_http), Cvoid, (Ref{aws_tls_connection_options},), connection_options)
+    ccall((:aws_tls_connection_options_clean_up, libaws_c_io), Cvoid, (Ref{aws_tls_connection_options},), connection_options)
 end
 
 function aws_tls_ctx_release(ctx)
-    ccall((:aws_tls_ctx_release, libaws_c_http), Cvoid, (Ptr{aws_tls_ctx},), ctx)
+    ccall((:aws_tls_ctx_release, libaws_c_io), Cvoid, (Ptr{aws_tls_ctx},), ctx)
 end
 
 function aws_tls_ctx_options_clean_up(options)
-    ccall((:aws_tls_ctx_options_clean_up, libaws_c_http), Cvoid, (Ptr{aws_tls_ctx_options},), options)
+    ccall((:aws_tls_ctx_options_clean_up, libaws_c_io), Cvoid, (Ptr{aws_tls_ctx_options},), options)
 end
 
 mutable struct aws_http_connection_manager_options
@@ -735,15 +735,15 @@ mutable struct aws_uri_builder_options
 end
 
 function aws_uri_init_from_builder_options(uri, allocator, options)
-    ccall((:aws_uri_init_from_builder_options, libaws_c_http), Cint, (Ref{aws_uri}, Ptr{aws_allocator}, Ref{aws_uri_builder_options}), uri, allocator, options)
+    ccall((:aws_uri_init_from_builder_options, libaws_c_common), Cint, (Ref{aws_uri}, Ptr{aws_allocator}, Ref{aws_uri_builder_options}), uri, allocator, options)
 end
 
 function aws_uri_query_string(uri)
-    ccall((:aws_uri_query_string, libaws_c_http), Ptr{aws_byte_cursor}, (Ref{aws_uri},), uri)
+    ccall((:aws_uri_query_string, libaws_c_common), Ptr{aws_byte_cursor}, (Ref{aws_uri},), uri)
 end
 
 function aws_array_list_init_static(list, raw_array, item_count, item_size)
-    ccall((:aws_array_list_init_static, libaws_c_http), Cvoid, (Ref{aws_array_list}, Ptr{Cvoid}, Csize_t, Csize_t), list, raw_array, item_count, item_size)
+    ccall((:aws_array_list_init_static, libaws_c_common), Cvoid, (Ref{aws_array_list}, Ptr{Cvoid}, Csize_t, Csize_t), list, raw_array, item_count, item_size)
 end
 
 function escapeuri(allocator, query_params)
