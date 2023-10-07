@@ -125,7 +125,7 @@
         @test isok(HTTP2.post("https://$httpbin/post"; body=UInt8['h','e','y']))
         io = IOBuffer("hey"); seekstart(io)
         @test isok(HTTP2.post("https://$httpbin/post"; body=io))
-        mktemp() do (path, io)
+        mktemp() do path, io
             write(io, "hey"); seekstart(io)
             @test isok(HTTP2.post("https://$httpbin/post"; body=io))
         end
