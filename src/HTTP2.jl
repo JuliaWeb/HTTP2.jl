@@ -21,6 +21,8 @@ mutable struct Request
     end
 end
 
+Base.getproperty(x::Request, s::Symbol) = s == :url ? x.uri : getfield(x, s)
+
 #TODO: make a RequestMetrics that includes:
 # request/response body sizes
 # # of retries

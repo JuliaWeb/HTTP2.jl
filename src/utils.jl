@@ -37,6 +37,9 @@ function deleteheader(h, k)
     return
 end
 
+removeheader(h, k) = deleteheader(h, k)
+isbytes(x) = x isa AbstractVector{UInt8} || x isa AbstractString
+
 resource(uri::URI) = string( isempty(uri.path)     ? "/" :     uri.path,
                             !isempty(uri.query)    ? "?" : "", uri.query,
                             !isempty(uri.fragment) ? "#" : "", uri.fragment)

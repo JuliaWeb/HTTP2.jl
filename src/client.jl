@@ -408,8 +408,6 @@ function request(req::Request;
         if ret != 0
             # NOTE: we're manually creating an AWSError here because calling aws_error
             # doesn't return anything useful, even though from the source code it should?
-            # we're also not seeing any logs from retry strategy code, so it seems like something
-            # isn't working quite right with the integration there
             ctx.error = CapturedException(AWSError("scheduling retry failed: $(ctx.request.uri.host)"), Base.backtrace())
             @goto error_fail
         end
