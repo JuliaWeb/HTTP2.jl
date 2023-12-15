@@ -46,6 +46,9 @@ end
 
 Response(body=UInt8[]) = Response(0, Header[], body, nothing)
 
+isredirect(r::Response) = isredirect(r.status)
+isredirect(status::Integer) = status in (301, 302, 303, 307, 308)
+
 # we use finalizers only because Clients are meant to be global consts and never
 # short-lived, temporary objects that should clean themselves up efficiently
 mutable struct Client
