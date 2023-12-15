@@ -317,9 +317,10 @@ mutable struct aws_uri
 end
 
 function URIs.URI(url::aws_uri)
+    ui = String(url.userinfo)
     return URI(;
         scheme=String(url.scheme),
-        userinfo=String(url.userinfo),
+        userinfo=ui == "" ? URIs.absent : ui,
         host=String(url.host_name),
         port=string(url.port),
         path=String(url.path),
