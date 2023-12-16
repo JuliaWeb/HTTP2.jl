@@ -318,7 +318,7 @@ end
 
 function URIs.URI(url::aws_uri)
     ui = String(url.userinfo)
-    p = String(url.port)
+    p = string(url.port)
     q = String(url.query_string)
     return URI(;
         scheme=String(url.scheme),
