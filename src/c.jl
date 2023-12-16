@@ -317,14 +317,14 @@ mutable struct aws_uri
 end
 
 function URIs.URI(url::aws_uri)
+    sch = String(url.scheme)
     ui = String(url.userinfo)
-    p = string(url.port)
     q = String(url.query_string)
     return URI(;
-        scheme=String(url.scheme),
+        scheme=sch,
         userinfo=ui == "" ? URIs.absent : ui,
         host=String(url.host_name),
-        port=p == "" ? URIs.absent : String(url.port),
+        port=sch == "https" && url.port == 443 ? URIs.absent : url.port == 80 ? URIs.absent : string(url.port),
         path=String(url.path),
         query=q == "" ? URIs.absent : q,
     )
