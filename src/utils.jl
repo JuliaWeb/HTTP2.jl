@@ -51,7 +51,7 @@ function print_request(io, method, path, headers, body)
         write(io, string(h.first, ": ", h.second, "\r\n"))
     end
     write(io, "\r\n")
-    write(io, body)
+    write(io, string(body))
     write(io, "\n\"\"\"\n")
     return
 end

@@ -318,13 +318,15 @@ end
 
 function URIs.URI(url::aws_uri)
     ui = String(url.userinfo)
+    p = String(url.port)
+    q = String(url.query_string)
     return URI(;
         scheme=String(url.scheme),
         userinfo=ui == "" ? URIs.absent : ui,
         host=String(url.host_name),
-        port=string(url.port),
+        port=p == "" ? URIs.absent : String(url.port),
         path=String(url.path),
-        query=String(url.query_string),
+        query=q == "" ? URIs.absent : q,
     )
 end
 
