@@ -22,6 +22,8 @@ mutable struct Request
 end
 
 Base.getproperty(x::Request, s::Symbol) = s == :url ? x.uri : getfield(x, s)
+print_request(io::IO, r::Request) = print_request(io, r.method, r.uri, r.headers, r.body)
+Base.show(io::IO, r::Request) = print_request(io, r)
 
 #TODO: make a RequestMetrics that includes:
 # request/response body sizes
@@ -45,6 +47,9 @@ mutable struct Response
 end
 
 Response(body=UInt8[]) = Response(0, Header[], body, nothing)
+
+print_response(io::IO, r::Response) = print_response(io, r.status, r.headers, r.body)
+Base.show(io::IO, r::Response) = print_response(io, r)
 
 isredirect(r::Response) = isredirect(r.status)
 isredirect(status::Integer) = status in (301, 302, 303, 307, 308)
@@ -223,6 +228,15 @@ end
 struct StatusError <: Exception
     request::Request
     response::Response
+end
+
+function Base.showerror(io::IO, e::StatusError)
+    println(io, "HTTP2.StatusError:")
+    println(io, "  request:")
+    print_request(io, e.request)
+    println(io, "  response:")
+    print_response(io, e.response)
+    return
 end
 
 const ALLOCATOR = Ref{Ptr{Cvoid}}(C_NULL)
