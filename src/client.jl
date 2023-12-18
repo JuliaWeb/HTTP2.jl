@@ -21,6 +21,7 @@ function make_input_stream(ctx)
             end
             # hold a reference to the request body in order to gc-preserve it
             ctx.request_body = unsafe_wrap(Vector{UInt8}, escapeuri(ctx.client.allocator, ctx.request.body))
+            @show String(copy(ctx.request_body))
             input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, aws_byte_cursor_from_c_str(ctx.request_body))
         elseif ctx.request.body isa IOStream
             ctx.request_body = Mmap.mmap(ctx.request.body)
