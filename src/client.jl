@@ -20,8 +20,7 @@ function make_input_stream(ctx)
                 setheader(headers, "content-type", "application/x-www-form-urlencoded")
             end
             # hold a reference to the request body in order to gc-preserve it
-            ctx.request_body = unsafe_wrap(Vector{UInt8}, escapeuri(ctx.client.allocator, ctx.request.body))
-            @show String(copy(ctx.request_body))
+            ctx.request_body = URIs.escapeuri(ctx.request.body)
             input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, aws_byte_cursor_from_c_str(ctx.request_body))
         elseif ctx.request.body isa IOStream
             ctx.request_body = Mmap.mmap(ctx.request.body)
