@@ -49,6 +49,7 @@ function make_input_stream(ctx)
         data_len_ref = Ref(0)
         aws_input_stream_get_length(input_stream, data_len_ref) != 0 && aws_throw_error()
         data_len = data_len_ref[]
+        ctx.response.metrics.request_body_length = data_len
         if data_len > 0
             setheader(headers, "content-length", string(data_len))
         else
@@ -241,6 +242,7 @@ end
 function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx)
     bc = unsafe_load(data)
     body = ctx.temp_response_body
+    ctx.response.metrics.response_body_length += bc.len
     # common response body manual type unrolling here
     if body isa IOBuffer
         if !hasroom(body, bc.len)
@@ -271,7 +273,7 @@ function c_on_metrics(stream, metrics::Ptr{StreamMetrics}, ctx)
     # println("on metrics")
     m = unsafe_load(metrics)
     if m.send_start_timestamp_ns != -1
-        ctx.response.metrics = m
+        ctx.response.metrics.stream_metrics = m
     end
     return
 end
@@ -296,8 +298,8 @@ function c_on_destroy(ctx)
     return
 end
 
-request(method, url, h=Header[], b::RequestBodyTypes=nothing; allocator=ALLOCATOR[], headers=h, body::RequestBodyTypes=b, kw...) =
-    request(Request(method, url, headers, body, allocator); kw...)
+request(method, url, h=Header[], b::RequestBodyTypes=nothing; allocator=ALLOCATOR[], headers=h, body::RequestBodyTypes=b, query=nothing, kw...) =
+    request(Request(method, url, headers, body, allocator, query); kw...)
 
 # main entrypoint for making an HTTP request
 # can provide method, url, headers, body, along with various keyword arguments
@@ -309,7 +311,8 @@ function request(req::Request;
     redirect_method=nothing,
     forwardheaders=true,
     # response options
-    response_body=nothing,
+    response_stream=nothing, # compat
+    response_body=response_stream,
     decompress::Union{Nothing, Bool}=nothing,
     status_exception::Bool=true,
     retry_non_idempotent::Bool=false,
@@ -490,6 +493,7 @@ macro client(modifier)
         function request(method, url, h=HTTP2.Header[], b::HTTP2.RequestBodyTypes=nothing;
             allocator=HTTP2.ALLOCATOR[],
             headers=h,
+            query=nothing,
             body::HTTP2.RequestBodyTypes=b,
             client::Union{Nothing, HTTP2.Client}=nothing,
             # redirect options
@@ -498,7 +502,8 @@ macro client(modifier)
             redirect_method=nothing,
             forwardheaders=true,
             # response options
-            response_body=nothing,
+            response_stream=nothing, # compat
+            response_body=response_stream,
             decompress::Union{Nothing, Bool}=nothing,
             status_exception::Bool=true,
             retry_non_idempotent::Bool=false,
@@ -506,7 +511,7 @@ macro client(modifier)
             verbose=0,
             kw...)
             $__source__
-            HTTP2.request(HTTP2.Request(method, url, headers, body, allocator); modifier=$modifier(; kw...),
+            HTTP2.request(HTTP2.Request(method, url, headers, body, allocator, query); modifier=$modifier(; kw...),
                 client, redirect, redirect_limit, redirect_method, forwardheaders, response_body, decompress, status_exception, retry_non_idempotent, verbose)
         end
     end)

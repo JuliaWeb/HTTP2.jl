@@ -15,20 +15,19 @@ mutable struct Request
     headers::Headers
     body::RequestBodyTypes
 
-    function Request(method::AbstractString, url::AbstractString, headers, body::RequestBodyTypes, allocator::Ptr{aws_allocator})
-        _uri = aws_uri(String(url), allocator)
+    function Request(method::AbstractString, url::AbstractString, headers, body::RequestBodyTypes, allocator::Ptr{aws_allocator}, query=nothing)
+        _uri = aws_uri(String(url) * (query === nothing ? "" : ("?" * URIs.escapeuri(query))), allocator)
         return new(String(method), URI(_uri), _uri, something(headers, Header[]), body)
     end
 end
 
 Base.getproperty(x::Request, s::Symbol) = s == :url ? x.uri : getfield(x, s)
-print_request(io::IO, r::Request) = print_request(io, r.method, r.uri, r.headers, r.body)
-Base.show(io::IO, r::Request) = print_request(io, r)
+print_request(io::IO, r::Request) = print_request(io, r.method, r.uri.path, r.headers, r.body)
+function Base.show(io::IO, r::Request)
+    println(io, "HTTP2.Request:")
+    print_request(io, r)
+end
 
-#TODO: make a RequestMetrics that includes:
-# request/response body sizes
-# # of retries
-# stream metrics
 struct StreamMetrics
     send_start_timestamp_ns::Int64
     send_end_timestamp_ns::Int64
@@ -39,17 +38,29 @@ struct StreamMetrics
     stream_id::UInt32
 end
 
+mutable struct RequestMetrics
+    request_body_length::Int
+    response_body_length::Int
+    nretries::Int
+    stream_metrics::Union{Nothing, StreamMetrics}
+end
+
+RequestMetrics() = RequestMetrics(0, 0, 0, nothing)
+
 mutable struct Response
     status::Int
     headers::Headers
     body::Any # IO or Vector{UInt8}
-    metrics::Union{Nothing, StreamMetrics}
+    metrics::RequestMetrics
 end
 
-Response(body=UInt8[]) = Response(0, Header[], body, nothing)
+Response(body=UInt8[]) = Response(0, Header[], body, RequestMetrics())
 
 print_response(io::IO, r::Response) = print_response(io, r.status, r.headers, r.body)
-Base.show(io::IO, r::Response) = print_response(io, r)
+function Base.show(io::IO, r::Response)
+    println(io, "HTTP2.Response:")
+    print_response(io, r)
+end
 
 isredirect(r::Response) = isredirect(r.status)
 isredirect(status::Integer) = status in (301, 302, 303, 307, 308)
