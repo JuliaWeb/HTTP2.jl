@@ -239,6 +239,18 @@ function hasroom(buf::Base.GenericIOBuffer, n)
     return (requested_buffer_capacity <= length(buf.data)) || (buf.writable && requested_buffer_capacity <= buf.maxsize)
 end
 
+function _unsafe_write(io::GenericIOBuffer, ptr::Ptr{UInt8}, nb::UInt)
+    # ensureroom(io, nb)
+    p = io.append ? io.size+1 : io.ptr
+    dest = pointer(io.data, p)
+    unsafe_copyto!(dest, ptr, nb)
+    io.size = max(io.size, (p + nb) - 1)
+    if !io.append
+        io.ptr += nb
+    end
+    return nb
+end
+
 function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx)
     bc = unsafe_load(data)
     body = ctx.temp_response_body
@@ -250,14 +262,14 @@ function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx)
             ctx.should_retry = false
             return Cint(0)
         end
-        unsafe_write(body, bc.ptr, bc.len)
+        _unsafe_write(body, bc.ptr, bc.len)
     elseif body isa Base.GenericIOBuffer{SubArray{UInt8, 1, Vector{UInt8}, Tuple{UnitRange{Int64}}, true}}
         if !hasroom(body, bc.len)
             ctx.error = CapturedException(ArgumentError("response body buffer is too small"), Base.backtrace())
             ctx.should_retry = false
             return Cint(0)
         end
-        unsafe_write(body, bc.ptr, bc.len)
+        _unsafe_write(body, bc.ptr, bc.len)
     elseif body isa CodecZlibNG.TranscodingStreams.TranscodingStream{GzipDecompressor, IOBuffer}
         unsafe_write(body, bc.ptr, bc.len)
     else
