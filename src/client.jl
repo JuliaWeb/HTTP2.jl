@@ -239,7 +239,7 @@ function hasroom(buf::Base.GenericIOBuffer, n)
     return (requested_buffer_capacity <= length(buf.data)) || (buf.writable && requested_buffer_capacity <= buf.maxsize)
 end
 
-function _unsafe_write(io::GenericIOBuffer, ptr::Ptr{UInt8}, nb::UInt)
+function _unsafe_write(io::Base.GenericIOBuffer, ptr::Ptr{UInt8}, nb::UInt)
     # ensureroom(io, nb)
     p = io.append ? io.size+1 : io.ptr
     dest = pointer(io.data, p)
