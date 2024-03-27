@@ -1,7 +1,15 @@
 module HTTP2
 
 using CodecZlib, URIs, Mmap
-using aws_c_http_jll, aws_c_io_jll, aws_c_common_jll
+@static if isfile("/app/aws-crt/lib/libaws-c-io.so")
+    const libaws_c_common = "/app/aws-crt/lib/libaws-c-common.so"
+    const libaws_c_io = "/app/aws-crt/lib/libaws-c-io.so"
+    const libaws_c_http = "/app/aws-crt/lib/libaws-c-http.so"
+else
+    const libaws_c_common = "/Users/jacob.quinn/aws-crt/lib/libaws-c-common.dylib"
+    const libaws_c_io = "/Users/jacob.quinn/aws-crt/lib/libaws-c-io.dylib"
+    const libaws_c_http = "/Users/jacob.quinn/aws-crt/lib/libaws-c-http.dylib"
+end
 
 include("utils.jl")
 include("c.jl")
