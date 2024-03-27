@@ -1,6 +1,6 @@
 module HTTP2
 
-using CodecZlibNG, URIs, Mmap
+using CodecZlib, URIs, Mmap
 using aws_c_http_jll, aws_c_io_jll, aws_c_common_jll
 
 include("utils.jl")

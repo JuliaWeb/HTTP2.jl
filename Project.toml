@@ -3,7 +3,7 @@ uuid = "b77c38ae-d26b-ff15-6dc9-5bc94be9e2a6"
 version = "1.0.0"
 
 [deps]
-CodecZlibNG = "642d12eb-acb5-4437-bcfc-a25e07ad685c"
+CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
 URIs = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
 aws_c_common_jll = "73048d1d-b8c4-5092-a58d-866c5e8d1e50"
