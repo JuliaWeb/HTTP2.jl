@@ -8,12 +8,12 @@ function make_input_stream(ctx)
             else
                 ctx.request_body = Vector{UInt8}(ctx.request.body)
             end
-            cbody = aws_byte_cursor_from_c_str(ctx.request.body)
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
+            ctx.body_byte_cursor = aws_byte_cursor_from_c_str(ctx.request.body)
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
         elseif ctx.request.body isa AbstractVector{UInt8}
             ctx.request_body = ctx.request.body
-            cbody = aws_byte_cursor(sizeof(ctx.request.body), pointer(ctx.request.body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
+            ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request.body), pointer(ctx.request.body))
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
         elseif ctx.request.body isa Union{AbstractDict, NamedTuple}
             # add application/x-www-form-urlencoded content-type header if not already present
             if !hasheader(headers, "content-type")
@@ -21,7 +21,8 @@ function make_input_stream(ctx)
             end
             # hold a reference to the request body in order to gc-preserve it
             ctx.request_body = URIs.escapeuri(ctx.request.body)
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, aws_byte_cursor_from_c_str(ctx.request_body))
+            ctx.body_byte_cursor = aws_byte_cursor_from_c_str(ctx.request_body)
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
         elseif ctx.request.body isa IOStream
             ctx.request_body = Mmap.mmap(ctx.request.body)
             input_stream = aws_input_stream_new_from_open_file(ctx.client.allocator, Libc.FILE(ctx.request.body))
@@ -32,8 +33,8 @@ function make_input_stream(ctx)
             end
             # we set the request.body to the Form bytes in order to gc-preserve them
             ctx.request_body = read(ctx.request.body)
-            cbody = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
+            ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
         elseif ctx.request.body isa IO
             # we set the request.body to the IO bytes in order to gc-preserve them
             bytes = readavailable(ctx.request.body)
@@ -41,8 +42,8 @@ function make_input_stream(ctx)
                 append!(bytes, readavailable(ctx.request.body))
             end
             ctx.request_body = bytes
-            cbody = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, cbody)
+            ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
         else
             throw(ArgumentError("request body must be a string, vector of UInt8, or IO"))
         end
