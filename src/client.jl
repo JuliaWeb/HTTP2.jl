@@ -315,8 +315,19 @@ function c_on_destroy(ctx)
     return
 end
 
+mkheaders(h::Headers) = h
+function mkheaders(h, headers=Vector{Header}(undef, length(h)))::Headers
+    # validation
+    for (i, head) in enumerate(h)
+        head isa String && throw(ArgumentError("header must be passed as key => value pair: `$head`"))
+        length(head) != 2 && throw(ArgumentError("invalid header key-value pair: $head"))
+        headers[i] = SubString(string(head[1])) => SubString(string(head[2]))
+    end
+    return headers
+end
+
 request(method, url, h=Header[], b::RequestBodyTypes=nothing; allocator=default_aws_allocator(), headers=h, body::RequestBodyTypes=b, query=nothing, kw...) =
-    request(Request(method, url, headers, body, allocator, query); kw...)
+    request(Request(method, url, mkheaders(headers), body, allocator, query); kw...)
 
 # main entrypoint for making an HTTP request
 # can provide method, url, headers, body, along with various keyword arguments
