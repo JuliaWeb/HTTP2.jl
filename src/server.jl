@@ -203,7 +203,7 @@ function c_on_request_body(stream, data::Ptr{aws_byte_cursor}, conn_ptr)
     body = conn.current_request.body
     try
         @assert hasroom(body, bc.len) "body buffer too small"
-        unsafe_write(conn.current_request.body, bc.ptr, bc.len)
+        unsafe_write(body, bc.ptr, bc.len)
         return Cint(0)
     catch
         @error "failed to write request body" exception=(exception, Base.catch_stack())
@@ -215,6 +215,7 @@ const on_request_done = Ref{Ptr{Cvoid}}(C_NULL)
 
 function c_on_request_done(stream, conn_ptr)
     conn = unsafe_pointer_to_objref(conn_ptr)
+    conn.current_request.body = take!(conn.current_request.body)
     try
         resp = conn.f(conn.current_request)::Response
         aws_resp = conn.current_response = aws_http_message_new_response(conn.allocator)
