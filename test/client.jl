@@ -27,11 +27,11 @@
         @test isok(HTTP2.get("https://$httpbin/encoding/utf8"))
     end
 
-    # @testset "Query to URI" begin
-    #     r = HTTP2.get(URI(HTTP2.URI("https://$httpbin/response-headers"); query=Dict("hey"=>"dude")))
-    #     h = Dict(r.headers)
-    #     @test (haskey(h, "Hey") ? h["Hey"] == "dude" : h["hey"] == "dude")
-    # end
+    @testset "Query to URI" begin
+        r = HTTP2.get(URI(HTTP2.URI("https://$httpbin/response-headers"); query=Dict("hey"=>"dude")))
+        h = Dict(r.headers)
+        @test (haskey(h, "Hey") ? h["Hey"] == "dude" : h["hey"] == "dude")
+    end
 
     # @testset "Cookie Requests" begin
     #     empty!(HTTP2.COOKIEJAR)
@@ -117,7 +117,6 @@
         write(io, body) # size=100, ptr=101
         r = HTTP2.get("https://$httpbin/bytes/100"; response_body=io)
         @test length(body) == 200
-
     end
 
     @testset "Client Body Posting - Vector{UTF8}, String, IOStream, IOBuffer, BufferStream, Dict, NamedTuple" begin

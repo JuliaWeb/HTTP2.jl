@@ -378,11 +378,17 @@ function request(req::Request;
             reset(ctx.completed)
             old_host = ctx.request.uri.host
             ctx.request.uri = resolvereference(ctx.request.uri, getheader(ctx.response.headers, "location"))
-            ctx.request._uri = aws_uri(ctx.request.uri, client.allocator)
+            uri_ref = Ref{aws_uri}()
+            url_str = string(ctx.request.uri)
+            GC.@preserve url_str begin
+                url_ref = Ref(aws_byte_cursor(sizeof(url_str), pointer(url_str)))
+                aws_uri_init_parse(uri_ref, client.allocator, url_ref)
+            end
+            ctx.request._uri = uri_ref[]
             ctx.request.method = newmethod(ctx.request.method, ctx.response.status, redirect_method)
             verbose >= 1 && @info "getting redirect client: $(ctx.request.uri.scheme), $(ctx.request.uri.host), $(getport(ctx.request._uri))"
             old_client = ctx.client
-            ctx.client = getclient((ctx.request.uri.scheme, ctx.request.uri.host, getport(ctx.request._uri)))
+            ctx.client = getclient((ctx.request.uri.scheme, ctx.request.uri.host, getport(ctx.request._uri), require_ssl_verification))
             verbose >= 2 && @info "redirecting to $(string(ctx.request.uri)) with method: $(String(ctx.request.method))"
             if ctx.request.method == "GET"
                 ctx.request.body = UInt8[]
@@ -419,7 +425,7 @@ function request(req::Request;
                     ctx.retry_token,
                     error_type,
                     retry_ready[],
-                    ctx
+                    pointer_from_objref(ctx)
                 ) != 0
                     ctx.error = CapturedException(aws_error(), Base.backtrace())
                     @goto error_fail

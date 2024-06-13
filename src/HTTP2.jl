@@ -16,15 +16,22 @@ mutable struct Request
     body::RequestBodyTypes
     context::Context
 
-    function Request(method::AbstractString, url::AbstractString, headers, body::RequestBodyTypes, allocator::Ptr{aws_allocator}, query=nothing, ctx=Context())
+    function Request(method::AbstractString, url, headers=Headers(), body::RequestBodyTypes=nothing, allocator::Ptr{aws_allocator}=default_aws_allocator(), query=nothing, ctx=Context())
         uri_ref = Ref{aws_uri}()
-        url_str = String(url) * (query === nothing ? "" : ("?" * URIs.escapeuri(query)))
+        if url isa AbstractString
+            url_str = String(url) * (query === nothing ? "" : ("?" * URIs.escapeuri(query)))
+            uri = URI(url_str)
+        elseif url isa URI
+            url_str = string(url)
+            uri = url
+        else
+            throw(ArgumentError("url must be an AbstractString or URI"))
+        end
         GC.@preserve url_str begin
             url_ref = Ref(aws_byte_cursor(sizeof(url_str), pointer(url_str)))
             aws_uri_init_parse(uri_ref, allocator, url_ref)
         end
-        u = uri_ref[]
-        return new(String(method), URI(url_str), uri_ref[], something(headers, Header[]), body, ctx)
+        return new(String(method), uri, uri_ref[], something(headers, Header[]), body, ctx)
     end
     Request() = new()
 end

@@ -341,7 +341,7 @@ Retrieve the original route registration string for a request after its url has 
 matched against a router. Helpful for metric logging to ignore matched variables in
 a path and only see the registered routes.
 """
-getroute(req) = get(req.context, :route, nothing)
+getroute(req) = Base.get(req.context, :route, nothing)
 
 """
     HTTP.getparams(req) -> Dict{String, String}
@@ -351,7 +351,7 @@ If a path was registered with a router via `HTTP.register!` like
 "/api/widget/{id}", then the path parameters are available in the request context
 and can be retrieved like `id = HTTP.getparams(req)["id"]`.
 """
-getparams(req) = get(req.context, :params, nothing)
+getparams(req) = Base.get(req.context, :params, nothing)
 
 """
     HTTP.getparam(req, name, default=nothing) -> String
@@ -363,7 +363,7 @@ If a path was registered with a router via `HTTP.register!` like
 function getparam(req, name, default=nothing)
     params = getparams(req)
     params === nothing && return default
-    return get(params, name, default)
+    return Base.get(params, name, default)
 end
 
 """
@@ -390,4 +390,4 @@ are expected to be stored in the `req.context[:cookies]` of the
 request context as implemented in the [`HTTP.Handlers.cookie_middleware`](@ref)
 middleware.
 """
-getcookies(req) = get(() -> Cookie[], req.context, :cookies)
+getcookies(req) = Base.get(() -> Cookie[], req.context, :cookies)
