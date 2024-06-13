@@ -246,8 +246,8 @@ end
 
 default404(::Request) = Response(404)
 default405(::Request) = Response(405)
-default404(s::Stream) = setstatus(s, 404)
-default405(s::Stream) = setstatus(s, 405)
+# default404(s::Stream) = setstatus(s, 404)
+# default405(s::Stream) = setstatus(s, 405)
 
 Router(_404=default404, _405=default405, middleware=nothing) = Router(_404, _405, Node(), middleware)
 
