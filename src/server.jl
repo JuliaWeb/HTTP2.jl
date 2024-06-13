@@ -188,14 +188,14 @@ function c_on_request_header_block_done(stream, header_block, conn_ptr)
     uri_ref = Ref{aws_uri}()
     aws_uri_init_parse(uri_ref, conn.allocator, url_ref)
     u = conn.current_request._uri = uri_ref[]
-    # conn.current_request.uri = URIs.URI(
-    #     scheme=str(u.scheme),
-    #     userinfo=str(u.userinfo),
-    #     host=str(u.host_name),
-    #     port=u.port,
-    #     path=str(u.path),
-    #     query=str(u.query_string),
-    # )
+    conn.current_request.uri = URIs.URI(
+        scheme=str(u.scheme),
+        userinfo=isempty(str(u.userinfo)) ? URIs.absent : str(u.userinfo),
+        host=str(u.host_name),
+        port=u.port == 0 ? URIs.absent : u.port,
+        path=isempty(str(u.path)) ? URIs.absent : str(u.path),
+        query=isempty(str(u.query_string)) ? URIs.absent : str(u.query_string),
+    )
     # prep request body
     buf = Vector{UInt8}(undef, 0)
     conn.current_request.body = writebuf(buf)

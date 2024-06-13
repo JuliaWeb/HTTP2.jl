@@ -282,7 +282,7 @@ register!(r::Router, path, handler) = register!(r, "*", path, handler)
 const Params = Dict{String, String}
 
 function gethandler(r::Router, req::Request)
-    url = URI(req.target)
+    url = req.uri
     segments = split(url.path, '/'; keepempty=false)
     leaf = match(r.routes, req.method, segments, 1)
     params = Params()
