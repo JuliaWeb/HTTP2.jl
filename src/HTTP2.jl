@@ -279,6 +279,7 @@ include("forms.jl"); using .Forms
 include("redirects.jl"); 
 include("client.jl")
 include("server.jl")
+include("handlers.jl")
 
 const LOGGER_FILE_REF = Ref{Libc.FILE}()
 const LOGGER_OPTIONS = Ref{aws_logger_standard_options}()
