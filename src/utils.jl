@@ -90,6 +90,17 @@ function getport(uri::aws_uri)
     end
 end
 
+function makeuri(u::aws_uri)
+    return URIs.URI(
+        scheme=str(u.scheme),
+        userinfo=isempty(str(u.userinfo)) ? URIs.absent : str(u.userinfo),
+        host=str(u.host_name),
+        port=u.port == 0 ? URIs.absent : u.port,
+        path=isempty(str(u.path)) ? URIs.absent : str(u.path),
+        query=isempty(str(u.query_string)) ? URIs.absent : str(u.query_string),
+    )
+end
+
 struct AWSError <: Exception
     msg::String
 end

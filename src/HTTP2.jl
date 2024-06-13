@@ -20,10 +20,8 @@ mutable struct Request
         uri_ref = Ref{aws_uri}()
         if url isa AbstractString
             url_str = String(url) * (query === nothing ? "" : ("?" * URIs.escapeuri(query)))
-            uri = URI(url_str)
         elseif url isa URI
             url_str = string(url)
-            uri = url
         else
             throw(ArgumentError("url must be an AbstractString or URI"))
         end
@@ -31,7 +29,8 @@ mutable struct Request
             url_ref = Ref(aws_byte_cursor(sizeof(url_str), pointer(url_str)))
             aws_uri_init_parse(uri_ref, allocator, url_ref)
         end
-        return new(String(method), uri, uri_ref[], something(headers, Header[]), body, ctx)
+        _uri = uri_ref[]
+        return new(String(method), makeuri(_uri), _uri, something(headers, Header[]), body, ctx)
     end
     Request() = new()
 end
