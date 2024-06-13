@@ -157,6 +157,7 @@ function c_on_incoming_request(aws_conn, conn_ptr)
     conn = unsafe_pointer_to_objref(conn_ptr)
     conn.current_request = Request()
     conn.current_request.headers = Headers()
+    conn.current_request.context = Context()
     return aws_http_stream_new_server_request_handler(
         FieldRef(conn, :request_handler_options)
     )

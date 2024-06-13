@@ -6,6 +6,7 @@ using LibAwsCommon, LibAwsIO, LibAwsHTTP
 include("utils.jl")
 
 const RequestBodyTypes = Union{AbstractString, AbstractVector{UInt8}, IO, AbstractDict, NamedTuple, Nothing}
+const Context = Dict{Symbol, Any}
 
 mutable struct Request
     method::String
@@ -13,8 +14,9 @@ mutable struct Request
     _uri::aws_uri
     headers::Headers
     body::RequestBodyTypes
+    context::Context
 
-    function Request(method::AbstractString, url::AbstractString, headers, body::RequestBodyTypes, allocator::Ptr{aws_allocator}, query=nothing)
+    function Request(method::AbstractString, url::AbstractString, headers, body::RequestBodyTypes, allocator::Ptr{aws_allocator}, query=nothing, ctx=Context())
         uri_ref = Ref{aws_uri}()
         url_str = String(url) * (query === nothing ? "" : ("?" * URIs.escapeuri(query)))
         GC.@preserve url_str begin
@@ -22,7 +24,7 @@ mutable struct Request
             aws_uri_init_parse(uri_ref, allocator, url_ref)
         end
         u = uri_ref[]
-        return new(String(method), URI(url_str), uri_ref[], something(headers, Header[]), body)
+        return new(String(method), URI(url_str), uri_ref[], something(headers, Header[]), body, ctx)
     end
     Request() = new()
 end
@@ -61,7 +63,7 @@ mutable struct Response
 end
 
 Response(body=UInt8[]) = Response(0, Header[], body, RequestMetrics())
-Response(status::Int, body::String) = Response(status, Header[], Vector{UInt8}(body), RequestMetrics())
+Response(status::Integer, body) = Response(status, Header[], Vector{UInt8}(string(body)), RequestMetrics())
 
 print_response(io::IO, r::Response) = print_response(io, r.status, r.headers, r.body)
 function Base.show(io::IO, r::Response)
