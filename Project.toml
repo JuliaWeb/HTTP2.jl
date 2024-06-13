@@ -4,11 +4,11 @@ version = "1.0.0"
 
 [deps]
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
+LibAwsCommon = "c6e421ba-b5f8-4792-a1c4-42948de3ed9d"
+LibAwsHTTP = "ce851869-0d7a-41e7-95ef-2d4cb63876dd"
+LibAwsIO = "a5388770-19df-4151-b103-3d71de896ddf"
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
 URIs = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
-aws_c_common_jll = "73048d1d-b8c4-5092-a58d-866c5e8d1e50"
-aws_c_http_jll = "3254fc65-9028-534d-aa9d-d76d128babc6"
-aws_c_io_jll = "13c41daa-f319-5298-b5eb-5754e0170d52"
 
 [compat]
 julia = "1.9"

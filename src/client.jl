@@ -62,7 +62,8 @@ end
 
 const on_setup = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_setup(conn, error_code, ctx)
+function c_on_setup(conn, error_code, ctx_ptr)
+    ctx = unsafe_pointer_to_objref(ctx_ptr)
     # println("on setup")
     if error_code != 0
         ctx.error = CapturedException(aws_error(), Base.backtrace())
@@ -146,9 +147,20 @@ function c_on_setup(conn, error_code, ctx)
     if input_stream != C_NULL
         aws_http_message_set_body_stream(request, input_stream)
     end
-
-    final_request = aws_http_make_request_options(request, ctx)
-    stream = aws_http_connection_make_request(conn, final_request)
+    ctx.request_options = Ref(aws_http_make_request_options(
+        1,
+        request,
+        pointer_from_objref(ctx),
+        on_response_headers[],
+        on_response_header_block_done[],
+        on_response_body[],
+        on_metrics[],
+        on_complete[],
+        on_destroy[],
+        false,
+        0 # response_first_byte_timeout_ms
+    ))
+    stream = aws_http_connection_make_request(conn, ctx.request_options)
     if stream == C_NULL
         ctx.error = CapturedException(aws_error(), Base.backtrace())
         ctx.should_retry = true
@@ -167,13 +179,14 @@ end
 
 const on_shutdown = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_shutdown(conn, error_code, ctx)
+function c_on_shutdown(conn, error_code, ctx_ptr)
     return
 end
 
 const on_response_headers = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_response_headers(stream, header_block, header_array, num_headers, ctx)
+function c_on_response_headers(stream, header_block, header_array, num_headers, ctx_ptr)
+    ctx = unsafe_pointer_to_objref(ctx_ptr)
     headers = unsafe_wrap(Array, Ptr{aws_http_header}(header_array), num_headers)
     for header in headers
         name = unsafe_string(header.name.ptr, header.name.len)
@@ -187,7 +200,8 @@ writebuf(body, maxsize=length(body) == 0 ? typemax(Int64) : length(body)) = IOBu
 
 const on_response_header_block_done = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_response_header_block_done(stream, header_block, ctx)
+function c_on_response_header_block_done(stream, header_block, ctx_ptr)
+    ctx = unsafe_pointer_to_objref(ctx_ptr)
     ref = Ref{Cint}()
     aws_http_stream_get_incoming_response_status(stream, ref)
     ctx.response.status = ref[]
@@ -215,7 +229,7 @@ function c_on_response_header_block_done(stream, header_block, ctx)
     ctx.temp_response_body = if ctx.decompress === true || (ctx.decompress === nothing && getheader(ctx.response.headers, "content-encoding") == "gzip")
         # we're going to gzip decompress the response body
         ctx.gzip_decompressing = true
-        CodecZlibNG.GzipDecompressorStream(response_body isa AbstractVector{UInt8} ? writebuf(response_body, typemax(Int64)) : response_body)
+        CodecZlib.GzipDecompressorStream(response_body isa AbstractVector{UInt8} ? writebuf(response_body, typemax(Int64)) : response_body)
     elseif response_body isa AbstractVector{UInt8}
         writebuf(response_body)
     else
@@ -239,7 +253,8 @@ function hasroom(buf::Base.GenericIOBuffer, n)
     return (requested_buffer_capacity <= length(buf.data)) || (buf.writable && requested_buffer_capacity <= buf.maxsize)
 end
 
-function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx)
+function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx_ptr)
+    ctx = unsafe_pointer_to_objref(ctx_ptr)
     bc = unsafe_load(data)
     body = ctx.temp_response_body
     ctx.response.metrics.response_body_length += bc.len
@@ -258,7 +273,7 @@ function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx)
             return Cint(0)
         end
         unsafe_write(body, bc.ptr, bc.len)
-    elseif body isa CodecZlibNG.TranscodingStreams.TranscodingStream{GzipDecompressor, IOBuffer}
+    elseif body isa CodecZlib.TranscodingStreams.TranscodingStream{GzipDecompressor, IOBuffer}
         unsafe_write(body, bc.ptr, bc.len)
     else
         unsafe_write(body, bc.ptr, bc.len)
@@ -269,7 +284,8 @@ end
 
 const on_metrics = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_metrics(stream, metrics::Ptr{StreamMetrics}, ctx)
+function c_on_metrics(stream, metrics::Ptr{StreamMetrics}, ctx_ptr)
+    ctx = unsafe_pointer_to_objref(ctx_ptr)
     # println("on metrics")
     m = unsafe_load(metrics)
     if m.send_start_timestamp_ns != -1
@@ -280,7 +296,8 @@ end
 
 const on_complete = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_complete(stream, error_code, ctx)
+function c_on_complete(stream, error_code, ctx_ptr)
+    ctx = unsafe_pointer_to_objref(ctx_ptr)
     if ctx.gzip_decompressing
         close(ctx.temp_response_body)
     end
@@ -298,7 +315,7 @@ function c_on_destroy(ctx)
     return
 end
 
-request(method, url, h=Header[], b::RequestBodyTypes=nothing; allocator=ALLOCATOR[], headers=h, body::RequestBodyTypes=b, query=nothing, kw...) =
+request(method, url, h=Header[], b::RequestBodyTypes=nothing; allocator=default_aws_allocator(), headers=h, body::RequestBodyTypes=b, query=nothing, kw...) =
     request(Request(method, url, headers, body, allocator, query); kw...)
 
 # main entrypoint for making an HTTP request
@@ -316,20 +333,22 @@ function request(req::Request;
     decompress::Union{Nothing, Bool}=nothing,
     status_exception::Bool=true,
     retry_non_idempotent::Bool=false,
+    require_ssl_verification::Bool=true,
     modifier=nothing,
     verbose=0,
     # NOTE: new keywords must also be added to the @client macro definition below
 )
 
-    verbose >= 1 && @info "getting client: $(req.uri.scheme), $(req.uri.host), $(req._uri.port)"
-    client = something(client, getclient((req.uri.scheme, req.uri.host, req._uri.port)))::Client
+    verbose >= 1 && @info "getting client: $(req.uri.scheme), $(req.uri.host), $(getport(req._uri))"
+    client = something(client, getclient((req.uri.scheme, req.uri.host, getport(req._uri), require_ssl_verification)))::Client
     # create a request context for shared state that we pass between all the callbacks
     ctx = RequestContext(client, req, Response(response_body), decompress, status_exception, retry_non_idempotent, modifier, verbose)
 
     # NOTE: this is threadsafe based on our usage of the "standard retry strategy" default aws implementation
 @label acquire_retry_token
     verbose >= 1 && @info "acquiring retry token: $(req.uri.host)"
-    if aws_retry_strategy_acquire_retry_token(client.retry_strategy, req._uri.host_name, on_acquired[], ctx, client.retry_timeout_ms) != 0
+    host_ref = Ref(req._uri.host_name)
+    if aws_retry_strategy_acquire_retry_token(client.retry_strategy, host_ref, on_acquired[], pointer_from_objref(ctx), client.retry_timeout_ms) != 0
         ctx.error = CapturedException(aws_error(), Base.backtrace())
         @goto error_fail
     end
@@ -349,9 +368,9 @@ function request(req::Request;
             ctx.request.uri = resolvereference(ctx.request.uri, getheader(ctx.response.headers, "location"))
             ctx.request._uri = aws_uri(ctx.request.uri, client.allocator)
             ctx.request.method = newmethod(ctx.request.method, ctx.response.status, redirect_method)
-            verbose >= 1 && @info "getting redirect client: $(ctx.request.uri.scheme), $(ctx.request.uri.host), $(ctx.request._uri.port)"
+            verbose >= 1 && @info "getting redirect client: $(ctx.request.uri.scheme), $(ctx.request.uri.host), $(getport(ctx.request._uri))"
             old_client = ctx.client
-            ctx.client = getclient((ctx.request.uri.scheme, ctx.request.uri.host, ctx.request._uri.port))
+            ctx.client = getclient((ctx.request.uri.scheme, ctx.request.uri.host, getport(ctx.request._uri)))
             verbose >= 2 && @info "redirecting to $(string(ctx.request.uri)) with method: $(String(ctx.request.method))"
             if ctx.request.method == "GET"
                 ctx.request.body = UInt8[]
@@ -406,7 +425,7 @@ function request(req::Request;
             ctx.retry_token,
             error_type,
             retry_ready[],
-            ctx
+            pointer_from_objref(ctx)
         )
         if ret != 0
             # NOTE: we're manually creating an AWSError here because calling aws_error
@@ -441,7 +460,8 @@ end
 
 const retry_ready = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_retry_ready(token::Ptr{aws_retry_token}, error_code::Cint, ctx)
+function c_retry_ready(token, error_code::Cint, ctx_ptr)
+    ctx = unsafe_pointer_to_objref(ctx_ptr)
     if error_code != 0
         ctx.error = CapturedException(aws_error(), Base.backtrace())
         ctx.should_retry = false # don't retry if our retry_schedule failed
@@ -449,13 +469,14 @@ function c_retry_ready(token::Ptr{aws_retry_token}, error_code::Cint, ctx)
         return
     end
     ctx.verbose >= 2 && @info "retry ready: $(ctx.request.uri.host)"
-    c_on_acquired(C_NULL, 0, token, ctx)
+    c_on_acquired(C_NULL, 0, token, ctx_ptr)
     return
 end
 
 const on_acquired = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_acquired(retry_strategy, error_code, retry_token::Ptr{aws_retry_token}, ctx)
+function c_on_acquired(retry_strategy, error_code, retry_token, ctx_ptr)
+    ctx = unsafe_pointer_to_objref(ctx_ptr)
     if error_code != 0
         ctx.error = CapturedException(aws_error(), Base.backtrace())
         ctx.should_retry = false # don't retry if we failed to get an initial retry_token
@@ -465,7 +486,7 @@ function c_on_acquired(retry_strategy, error_code, retry_token::Ptr{aws_retry_to
     ctx.retry_token = retry_token
     #NOTE: this is threadsafe based on our usage of the default aws connection manager implementation
     ctx.verbose >= 2 && @info "acquired retry token, acquiring connection: $(ctx.request.uri.host)"
-    aws_http_connection_manager_acquire_connection(ctx.client.connection_manager, on_setup[], ctx)
+    aws_http_connection_manager_acquire_connection(ctx.client.connection_manager, on_setup[], ctx_ptr)
 end
 
 get(a...; kw...) = request("GET", a...; kw...)

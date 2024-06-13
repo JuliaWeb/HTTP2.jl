@@ -30,14 +30,13 @@ function setheader(h, k, v)
     return
 end
 
-function deleteheader(h, k)
+function removeheader(h, k)
     i = findfirst(x -> ascii_lc_isequal(x.first, k), h)
     i === nothing && return
     deleteat!(h, i)
     return
 end
 
-removeheader(h, k) = deleteheader(h, k)
 isbytes(x) = x isa AbstractVector{UInt8} || x isa AbstractString
 
 resource(uri::URI) = string( isempty(uri.path)     ? "/" :     uri.path,
@@ -63,7 +62,51 @@ function print_response(io, status, headers, body)
         write(io, string(h.first, ": ", h.second, "\r\n"))
     end
     write(io, "\r\n")
-    write(io, body)
+    write(io, something(body, ""))
     write(io, "\n\"\"\"\n")
     return
 end
+
+str(bc::aws_byte_cursor) = bc.ptr == C_NULL || bc.len == 0 ? "" : unsafe_string(bc.ptr, bc.len)
+
+function print_uri(io, uri::aws_uri)
+    print(io, "scheme: ", str(uri.scheme), "\n")
+    print(io, "userinfo: ", str(uri.userinfo), "\n")
+    print(io, "host_name: ", str(uri.host_name), "\n")
+    print(io, "port: ", uri.port, "\n")
+    print(io, "path: ", str(uri.path), "\n")
+    print(io, "query: ", str(uri.query_string), "\n")
+    return
+end
+
+const URI_SCHEME_HTTPS = "https"
+const URI_SCHEME_WSS = "wss"
+function getport(uri::aws_uri)
+    sch = Ref(uri.scheme)
+    GC.@preserve sch begin
+        return UInt32(uri.port != 0 ? uri.port :
+        (aws_byte_cursor_eq_c_str_ignore_case(sch, URI_SCHEME_HTTPS) ||
+            aws_byte_cursor_eq_c_str_ignore_case(sch, URI_SCHEME_WSS)) ? 443 : 80)
+    end
+end
+
+struct AWSError <: Exception
+    msg::String
+end
+
+aws_error() = AWSError(unsafe_string(aws_error_debug_str(aws_last_error())))
+aws_throw_error() = throw(aws_error())
+
+struct FieldRef{T, S}
+    x::T
+    field::Symbol
+end
+
+FieldRef(x::T, field::Symbol) where {T} = FieldRef{T, fieldtype(T, field)}(x, field)
+
+function Base.unsafe_convert(P::Union{Type{Ptr{T}},Type{Ptr{Cvoid}}}, x::FieldRef{S, T}) where {T, S}
+    @assert isconcretetype(S) && ismutabletype(S) "only fields of mutable types are supported with FieldRef"
+    return P(pointer_from_objref(x.x) + fieldoffset(S, Base.fieldindex(S, x.field)))
+end
+
+Base.pointer(x::FieldRef{S, T}) where {S, T} = Base.unsafe_convert(Ptr{T}, x)
