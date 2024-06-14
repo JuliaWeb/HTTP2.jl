@@ -217,7 +217,7 @@ function c_on_request_done(stream, conn_ptr)
     conn = unsafe_pointer_to_objref(conn_ptr)
     conn.current_request.body = take!(conn.current_request.body)
     try
-        resp = conn.f(conn.current_request)::Response
+        resp = fetch(Threads.@spawn(conn.f(conn.current_request)::Response))
         aws_resp = conn.current_response = aws_http_message_new_response(conn.allocator)
         aws_http_message_set_response_status(aws_resp, resp.status % Cint)
         for (k, v) in resp.headers
@@ -226,12 +226,10 @@ function c_on_request_done(stream, conn_ptr)
         end
         len = sizeof(resp.body)
         cbody = Ref(aws_byte_cursor(len, pointer(resp.body)))
-        @info "response body" body=str(cbody[])
         input_stream = aws_input_stream_new_from_cursor(conn.allocator, cbody)
         aws_http_message_set_body_stream(aws_resp, input_stream)
         aws_http_message_add_header(aws_resp, aws_http_header(aws_byte_cursor_from_c_str("content-length"), aws_byte_cursor_from_c_str(string(len)), AWS_HTTP_HEADER_COMPRESSION_USE_CACHE))
         @assert aws_http_stream_send_response(stream, aws_resp) == 0
-        @info "response sent"
     catch e
         @error "failed to process request" exception=(e, catch_backtrace())
         return Cint(-1)
@@ -244,7 +242,6 @@ const on_server_complete = Ref{Ptr{Cvoid}}(C_NULL)
 function c_on_server_complete(stream, error_code, conn_ptr)
     conn = unsafe_pointer_to_objref(conn_ptr)
     aws_http_message_destroy(conn.current_response)
-    @info "response complete"
     return Cint(0)
 end
 
