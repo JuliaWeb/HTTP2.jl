@@ -29,8 +29,11 @@ mutable struct Server{F}
     server::Ptr{aws_http_server}
     connections_lock::ReentrantLock
     connections::Set{Connection}
+    closed::Threads.Event
     Server{F}() where {F} = new{F}()
 end
+
+Base.wait(s::Server) = wait(s.closed)
 
 ftype(::Server{F}) where {F} = F
 
@@ -258,6 +261,7 @@ function Base.close(server::Server)
     if state == :running
         aws_http_server_release(server.server)
         @assert take!(server.comm) == :destroyed
+        notify(server.closed)
     end
     return
 end
