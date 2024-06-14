@@ -62,6 +62,7 @@ function serve!(f, host="127.0.0.1", port=8080;
     server = Server{typeof(f)}()
     server.f = f
     @atomic server.state = :initializing
+    server.closed = Threads.Event()
     server.comm = Channel{Symbol}(1)
     server.allocator = allocator
     server.endpoint = endpoint !== nothing ? endpoint : socket_endpoint(host, port)
