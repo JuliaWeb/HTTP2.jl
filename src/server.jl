@@ -228,6 +228,7 @@ function c_on_request_done(stream, conn_ptr)
             header = aws_http_header(aws_byte_cursor_from_c_str(string(k)), aws_byte_cursor_from_c_str(string(v)), AWS_HTTP_HEADER_COMPRESSION_USE_CACHE)
             aws_http_message_add_header(aws_resp, header)
         end
+        #TODO: handle other response body types
         len = sizeof(resp.body)
         cbody = Ref(aws_byte_cursor(len, pointer(resp.body)))
         input_stream = aws_input_stream_new_from_cursor(conn.allocator, cbody)
