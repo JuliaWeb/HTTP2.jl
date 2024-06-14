@@ -70,6 +70,7 @@ end
 
 Response(body=UInt8[]) = Response(0, Header[], body, RequestMetrics())
 Response(status::Integer, body) = Response(status, Header[], Vector{UInt8}(string(body)), RequestMetrics())
+Response(status::Integer) = Response(status, Header[], Vector{UInt8}(), RequestMetrics())
 
 print_response(io::IO, r::Response) = print_response(io, r.status, r.headers, r.body)
 function Base.show(io::IO, r::Response)
