@@ -30,6 +30,8 @@ function setheader(h, k, v)
     return
 end
 
+setheader(h, p::Pair) = setheader(h, p.first, p.second)
+
 function removeheader(h, k)
     i = findfirst(x -> ascii_lc_isequal(x.first, k), h)
     i === nothing && return

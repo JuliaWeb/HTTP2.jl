@@ -35,7 +35,7 @@ mutable struct Request
     Request() = new()
 end
 
-Base.getproperty(x::Request, s::Symbol) = s == :url ? x.uri : getfield(x, s)
+Base.getproperty(x::Request, s::Symbol) = s == :url || s == :target ? x.uri : getfield(x, s)
 print_request(io::IO, r::Request) = print_request(io, r.method, r.uri.path, r.headers, r.body)
 function Base.show(io::IO, r::Request)
     println(io, "HTTP2.Request:")

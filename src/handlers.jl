@@ -59,7 +59,6 @@ end
 
 Base.show(io::IO, x::Leaf) = print(io, "Leaf($(x.method))")
 
-export Node
 mutable struct Node
     segment::Union{String, Variable}
     exact::Vector{Node} # sorted alphabetically, all x.segment are String
