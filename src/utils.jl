@@ -45,9 +45,9 @@ resource(uri::URI) = string( isempty(uri.path)     ? "/" :     uri.path,
                             !isempty(uri.query)    ? "?" : "", uri.query,
                             !isempty(uri.fragment) ? "#" : "", uri.fragment)
 
-function print_request(io, method, path, headers, body)
+function print_request(io, method, version, path, headers, body)
     write(io, "\"\"\"\n")
-    write(io, string(method, " ", path, " HTTP/1.1\r\n"))
+    write(io, string(method, " ", path, " HTTP/$version\r\n"))
     for h in headers
         write(io, string(h.first, ": ", h.second, "\r\n"))
     end
@@ -57,9 +57,9 @@ function print_request(io, method, path, headers, body)
     return
 end
 
-function print_response(io, status, headers, body)
+function print_response(io, status, version, headers, body)
     write(io, "\"\"\"\n")
-    write(io, string("HTTP/1.1 ", status, "\r\n"))
+    write(io, string("HTTP/$version ", status, "\r\n"))
     for h in headers
         write(io, string(h.first, ": ", h.second, "\r\n"))
     end

@@ -3,6 +3,7 @@ uuid = "b77c38ae-d26b-ff15-6dc9-5bc94be9e2a6"
 version = "1.0.0"
 
 [deps]
+Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
 LibAwsCommon = "c6e421ba-b5f8-4792-a1c4-42948de3ed9d"
 LibAwsHTTP = "ce851869-0d7a-41e7-95ef-2d4cb63876dd"

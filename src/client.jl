@@ -80,17 +80,18 @@ function c_on_setup(conn, error_code, ctx_ptr)
     ctx.verbose >= 1 && @info "building request: $(ctx.request.uri.host)"
     ctx.connection = conn
     protocol_version = aws_http_connection_get_version(conn)
+    ctx.response.version = protocol_version == AWS_HTTP_VERSION_2 ? "2" : protocol_version == AWS_HTTP_VERSION_1_1 ? "1.1" : "1.0"
+    ctx.request.version = ctx.response.version
     # build up request headers
-    headers = ctx.request.headers
+    headers = Headers()
+    path = resource(ctx.request.uri)
     if protocol_version == AWS_HTTP_VERSION_2
         # set scheme
         setheader(headers, ":scheme", ctx.request.uri.scheme)
         # set authority
         setheader(headers, ":authority", ctx.request.uri.host)
-    else
-        # set host
-        setheader(headers, "host", ctx.request.uri.host)
     end
+    # setheader(headers, "host", ctx.request.uri.host)
     # accept header
     if !hasheader(headers, "accept")
         setheader(headers, "accept", "*/*")
@@ -100,9 +101,18 @@ function c_on_setup(conn, error_code, ctx_ptr)
         setheader(headers, "user-agent", USER_AGENT[])
     end
     # accept-encoding
-    if ctx.decompress === nothing || ctx.decompress
-        setheader(headers, "accept-encoding", "gzip")
+    # if ctx.decompress === nothing || ctx.decompress
+    #     setheader(headers, "accept-encoding", "gzip")
+    # end
+    # basic auth if present
+    if !isempty(ctx.request.uri.userinfo)
+        setheader(headers, "authorization", "Basic $(base64encode(ctx.request.uri.userinfo))")
     end
+    # add any user-provided headers
+    for header in ctx.request.headers
+        push!(headers, lowercase(string(header[1])) => string(header[2]))
+    end
+    ctx.request.headers = headers
     # process request body if present
     input_stream = make_input_stream(ctx)
     # call a user-provided modifier function (if provided)
@@ -127,21 +137,13 @@ function c_on_setup(conn, error_code, ctx_ptr)
         Threads.notify(ctx.completed)
         return
     end
-    path = resource(ctx.request.uri)
-    if protocol_version == AWS_HTTP_VERSION_2
-        # set method
-        setheader(headers, ":method", ctx.request.method)
-        # set path
-        setheader(headers, ":path", path)
-    else
-        # set method
-        aws_http_message_set_request_method(request, aws_byte_cursor_from_c_str(ctx.request.method))
-        # set path
-        aws_http_message_set_request_path(request, aws_byte_cursor_from_c_str(path))
-    end
+    # set method
+    aws_http_message_set_request_method(request, aws_byte_cursor_from_c_str(ctx.request.method))
+    # set path
+    aws_http_message_set_request_path(request, aws_byte_cursor_from_c_str(path))
     # add headers to request
     for (k, v) in headers
-        header = aws_http_header(aws_byte_cursor_from_c_str(string(k)), aws_byte_cursor_from_c_str(string(v)), AWS_HTTP_HEADER_COMPRESSION_USE_CACHE)
+        header = aws_http_header(aws_byte_cursor_from_c_str(k), aws_byte_cursor_from_c_str(v), AWS_HTTP_HEADER_COMPRESSION_USE_CACHE)
         aws_http_message_add_header(request, header)
     end
     # set body from input_stream if present

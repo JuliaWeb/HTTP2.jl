@@ -1,6 +1,6 @@
 module HTTP2
 
-using CodecZlib, URIs, Mmap
+using CodecZlib, URIs, Mmap, Base64
 using LibAwsCommon, LibAwsIO, LibAwsHTTP
 
 include("utils.jl")
@@ -10,6 +10,7 @@ const Context = Dict{Symbol, Any}
 
 mutable struct Request
     method::String
+    version::String
     uri::URI
     _uri::aws_uri
     headers::Headers
@@ -30,13 +31,13 @@ mutable struct Request
             aws_uri_init_parse(uri_ref, allocator, url_ref)
         end
         _uri = uri_ref[]
-        return new(String(method), makeuri(_uri), _uri, something(headers, Header[]), body, ctx)
+        return new(String(method), "", makeuri(_uri), _uri, something(headers, Header[]), body, ctx)
     end
     Request() = new()
 end
 
 Base.getproperty(x::Request, s::Symbol) = s == :url || s == :target ? x.uri : getfield(x, s)
-print_request(io::IO, r::Request) = print_request(io, r.method, r.uri.path, r.headers, r.body)
+print_request(io::IO, r::Request) = print_request(io, r.method, r.version, r.uri.path, r.headers, r.body)
 function Base.show(io::IO, r::Request)
     println(io, "HTTP2.Request:")
     print_request(io, r)
@@ -63,16 +64,17 @@ RequestMetrics() = RequestMetrics(0, 0, 0, nothing)
 
 mutable struct Response
     status::Int
+    version::String
     headers::Headers
     body::Any # IO or Vector{UInt8}
     metrics::RequestMetrics
 end
 
-Response(body=UInt8[]) = Response(0, Header[], body, RequestMetrics())
-Response(status::Integer, body) = Response(status, Header[], Vector{UInt8}(string(body)), RequestMetrics())
-Response(status::Integer) = Response(status, Header[], Vector{UInt8}(), RequestMetrics())
+Response(body=UInt8[]) = Response(0, "", Header[], body, RequestMetrics())
+Response(status::Integer, body) = Response(status, "", Header[], Vector{UInt8}(string(body)), RequestMetrics())
+Response(status::Integer) = Response(status, "", Header[], Vector{UInt8}(), RequestMetrics())
 
-print_response(io::IO, r::Response) = print_response(io, r.status, r.headers, r.body)
+print_response(io::IO, r::Response) = print_response(io, r.status, r.version, r.headers, r.body)
 function Base.show(io::IO, r::Response)
     println(io, "HTTP2.Response:")
     print_response(io, r)
@@ -307,7 +309,7 @@ function __init__()
     # initialize logger
     LOGGER[] = aws_mem_acquire(allocator, 64)
     LOGGER_FILE_REF[] = Libc.FILE(Libc.RawFD(1), "w")
-    LOGGER_OPTIONS[] = aws_logger_standard_options(aws_log_level(2), C_NULL, Ptr{Libc.FILE}(LOGGER_FILE_REF[].ptr))
+    LOGGER_OPTIONS[] = aws_logger_standard_options(aws_log_level(3), C_NULL, Ptr{Libc.FILE}(LOGGER_FILE_REF[].ptr))
     @assert aws_logger_init_standard(LOGGER[], allocator, LOGGER_OPTIONS) == 0
     aws_logger_set(LOGGER[])
     # intialize c functions
