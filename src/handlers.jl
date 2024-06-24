@@ -1,3 +1,7 @@
+module Handlers
+
+import ..Request
+
 """
     Handler
 
@@ -390,3 +394,5 @@ request context as implemented in the [`HTTP.Handlers.cookie_middleware`](@ref)
 middleware.
 """
 getcookies(req) = Base.get(() -> Cookie[], req.context, :cookies)
+
+end # module Handlers

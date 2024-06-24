@@ -19,6 +19,8 @@ function getheader(h, k, d="")
     i = findfirst(x -> ascii_lc_isequal(x.first, k), h)
     return i === nothing ? d : h[i].second
 end
+# backwards compat
+const header = getheader
 
 function setheader(h, k, v)
     i = findfirst(x -> ascii_lc_isequal(x.first, k), h)

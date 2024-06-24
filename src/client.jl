@@ -90,8 +90,10 @@ function c_on_setup(conn, error_code, ctx_ptr)
         setheader(headers, ":scheme", ctx.request.uri.scheme)
         # set authority
         setheader(headers, ":authority", ctx.request.uri.host)
+    else
+        setheader(headers, "host", ctx.request.uri.host)
     end
-    # setheader(headers, "host", ctx.request.uri.host)
+    
     # accept header
     if !hasheader(headers, "accept")
         setheader(headers, "accept", "*/*")
@@ -101,9 +103,9 @@ function c_on_setup(conn, error_code, ctx_ptr)
         setheader(headers, "user-agent", USER_AGENT[])
     end
     # accept-encoding
-    # if ctx.decompress === nothing || ctx.decompress
-    #     setheader(headers, "accept-encoding", "gzip")
-    # end
+    if ctx.decompress === nothing || ctx.decompress
+        setheader(headers, "accept-encoding", "gzip")
+    end
     # basic auth if present
     if !isempty(ctx.request.uri.userinfo)
         setheader(headers, "authorization", "Basic $(base64encode(ctx.request.uri.userinfo))")
@@ -532,7 +534,7 @@ macro client(modifier)
         options(a...; kw...) = ($__source__; request("OPTIONS", a...; kw...))
         # open(f, a...; kw...) = ($__source__; request(a...; iofunction=f, kw...))
         function request(method, url, h=HTTP2.Header[], b::HTTP2.RequestBodyTypes=nothing;
-            allocator=HTTP2.ALLOCATOR[],
+            allocator=HTTP2.default_aws_allocator(),
             headers=h,
             query=nothing,
             body::HTTP2.RequestBodyTypes=b,

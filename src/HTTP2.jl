@@ -42,6 +42,8 @@ function Base.show(io::IO, r::Request)
     println(io, "HTTP2.Request:")
     print_request(io, r)
 end
+# backwards compat
+header(r::Request, key::String) = getheader(r.headers, key)
 
 struct StreamMetrics
     send_start_timestamp_ns::Int64
