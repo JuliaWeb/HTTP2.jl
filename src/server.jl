@@ -3,34 +3,52 @@ socket_endpoint(host, port) = aws_socket_endpoint(
     port % UInt32
 )
 
-mutable struct Connection{F}
-    f::F
-    allocator::Ptr{aws_allocator}
-    server::Any # Server
-    connection::Ptr{aws_http_connection}
-    connection_options::aws_http_server_connection_options
+mutable struct Connection{F, S}
+    const f::F
+    const server::S # Server
+    const allocator::Ptr{aws_allocator}
+    const connection::Ptr{aws_http_connection}
     request_handler_options::aws_http_request_handler_options
-    current_request::Request
     current_response::Ptr{aws_http_message}
-    Connection{F}() where {F} = new{F}()
+    connection_options::aws_http_server_connection_options
+    current_request::Request
+
+    Connection{F, S}(
+        f::F,
+        server::S,
+        allocator::Ptr{aws_allocator},
+        connection::Ptr{aws_http_connection},
+    ) where {F, S} = new{F, S}(f, server, allocator, connection)
 end
 
 Base.hash(c::Connection, h::UInt) = hash(c.connection, h)
 
 mutable struct Server{F}
-    f::F
+    const f::F
+    const comm::Channel{Symbol}
+    const allocator::Ptr{aws_allocator}
+    const endpoint::aws_socket_endpoint
+    const socket_options::aws_socket_options
+    const tls_options::Union{aws_tls_connection_options, Nothing}
+    const connections_lock::ReentrantLock
+    const connections::Set{Connection}
+    const closed::Threads.Event
     @atomic state::Symbol # :initializing, :running, :closed
-    comm::Channel{Symbol}
-    allocator::Ptr{aws_allocator}
-    endpoint::aws_socket_endpoint
-    socket_options::aws_socket_options
-    tls_options::Union{aws_tls_connection_options, Nothing}
-    server_options::aws_http_server_options
     server::Ptr{aws_http_server}
-    connections_lock::ReentrantLock
-    connections::Set{Connection}
-    closed::Threads.Event
-    Server{F}() where {F} = new{F}()
+    server_options::aws_http_server_options
+
+    Server{F}(
+        f::F,
+        comm::Channel{Symbol},
+        allocator::Ptr{aws_allocator},
+        endpoint::aws_socket_endpoint,
+        socket_options::aws_socket_options,
+        tls_options::Union{aws_tls_connection_options, Nothing},
+        connections_lock::ReentrantLock,
+        connections::Set{Connection},
+        closed::Threads.Event,
+        state::Symbol,
+    ) where {F} = new{F}(f, comm, allocator, endpoint, socket_options, tls_options, connections_lock, connections, closed, state)
 end
 
 Base.wait(s::Server) = wait(s.closed)
@@ -59,31 +77,35 @@ function serve!(f, host="127.0.0.1", port=8080;
     ssl_alpn_list="h2;http/1.1",
     initial_window_size=typemax(UInt64),
     )
-    server = Server{typeof(f)}()
-    server.f = f
-    @atomic server.state = :initializing
-    server.closed = Threads.Event()
-    server.comm = Channel{Symbol}(1)
-    server.allocator = allocator
-    server.endpoint = endpoint !== nothing ? endpoint : socket_endpoint(host, port)
-    server.socket_options = socket_options !== nothing ? socket_options : aws_socket_options(
-        AWS_SOCKET_STREAM, # socket type
-        socket_domain == :ipv4 ? AWS_SOCKET_IPV4 : AWS_SOCKET_IPV6, # socket domain
-        connect_timeout_ms,
-        keep_alive_interval_sec,
-        keep_alive_timeout_sec,
-        keep_alive_max_failed_probes,
-        keepalive
+    server = Server{typeof(f)}(
+        f, # RequestHandler
+        Channel{Symbol}(1), # comm
+        allocator,
+        endpoint !== nothing ? endpoint : socket_endpoint(host, port),
+        socket_options !== nothing ? socket_options : aws_socket_options(
+            AWS_SOCKET_STREAM, # socket type
+            socket_domain == :ipv4 ? AWS_SOCKET_IPV4 : AWS_SOCKET_IPV6, # socket domain
+            connect_timeout_ms,
+            keep_alive_interval_sec,
+            keep_alive_timeout_sec,
+            keep_alive_max_failed_probes,
+            keepalive
+        ),
+        tls_options !== nothing ? tls_options :
+            any(x -> x !== nothing, (ssl_cert, ssl_key, ssl_capath, ssl_cacert)) ? LibAwsIO.tlsoptions(host;
+                ssl_cert,
+                ssl_key,
+                ssl_capath,
+                ssl_cacert,
+                ssl_insecure,
+                ssl_alpn_list
+            ) : nothing,
+        ReentrantLock(), # connections_lock
+        Set{Connection}(), # connections
+        Threads.Event(), # closed
+        :initializing, # state
+        C_NULL # server
     )
-    server.tls_options = tls_options !== nothing ? tls_options :
-        any(x -> x !== nothing, (ssl_cert, ssl_key, ssl_capath, ssl_cacert)) ? LibAwsIO.tlsoptions(host;
-            ssl_cert,
-            ssl_key,
-            ssl_capath,
-            ssl_cacert,
-            ssl_insecure,
-            ssl_alpn_list
-        ) : nothing
     server.server_options = aws_http_server_options(
         1,
         allocator,
@@ -97,8 +119,6 @@ function serve!(f, host="127.0.0.1", port=8080;
         on_destroy_complete[],
         false # manual_window_management
     )
-    server.connections_lock = ReentrantLock()
-    server.connections = Set{Connection}()
     server.server = aws_http_server_new(FieldRef(server, :server_options))
     @assert server.server != C_NULL "failed to create server"
     @atomic server.state = :running
@@ -113,11 +133,12 @@ function c_on_incoming_connection(aws_server, aws_conn, error_code, server_ptr)
         @error "incoming connection error" exception=(aws_error(), Base.backtrace())
         return
     end
-    conn = Connection{ftype(server)}()
-    conn.f = server.f
-    conn.allocator = server.allocator
-    conn.server = server
-    conn.connection = aws_conn
+    conn = Connection(
+        server.f,
+        server,
+        server.allocator,
+        aws_conn,
+    )
     conn.connection_options = aws_http_server_connection_options(
         1,
         pointer_from_objref(conn),
@@ -169,10 +190,10 @@ end
 
 const on_request_headers = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_request_headers(stream, header_block, header_array, num_headers, conn_ptr)
+function c_on_request_headers(stream, header_block, header_array::Ptr{aws_http_header}, num_headers, conn_ptr)
     conn = unsafe_pointer_to_objref(conn_ptr)
-    headers = unsafe_wrap(Array, Ptr{aws_http_header}(header_array), num_headers)
-    for header in headers
+    for i = 1:num_headers
+        header = unsafe_load(header_array, i)
         name = unsafe_string(header.name.ptr, header.name.len)
         value = unsafe_string(header.value.ptr, header.value.len)
         push!(conn.current_request.headers, name => value)

@@ -266,6 +266,7 @@ function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx_ptr)
     # common response body manual type unrolling here
     if body isa IOBuffer
         if !hasroom(body, bc.len)
+            @error "response body buffer is too small 1"
             ctx.error = CapturedException(ArgumentError("response body buffer is too small"), Base.backtrace())
             ctx.should_retry = false
             return Cint(0)
@@ -273,6 +274,7 @@ function c_on_response_body(stream, data::Ptr{aws_byte_cursor}, ctx_ptr)
         unsafe_write(body, bc.ptr, bc.len)
     elseif body isa Base.GenericIOBuffer{SubArray{UInt8, 1, Vector{UInt8}, Tuple{UnitRange{Int64}}, true}}
         if !hasroom(body, bc.len)
+            @error "response body buffer is too small 2"
             ctx.error = CapturedException(ArgumentError("response body buffer is too small"), Base.backtrace())
             ctx.should_retry = false
             return Cint(0)

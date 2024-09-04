@@ -43,7 +43,7 @@ function Base.show(io::IO, r::Request)
     print_request(io, r)
 end
 # backwards compat
-header(r::Request, key::String) = getheader(r.headers, key)
+const header = getheader
 
 struct StreamMetrics
     send_start_timestamp_ns::Int64
@@ -157,7 +157,8 @@ mutable struct Client
             keep_alive_interval_sec,
             keep_alive_timeout_sec,
             keep_alive_max_failed_probes,
-            keepalive
+            keepalive,
+            ntuple(x -> Cchar(0), 16) # network_interface_name
         ))
         # tls options
         host_str = String(host)
@@ -192,7 +193,9 @@ mutable struct Client
             C_NULL, # shutdown_complete_user_data::Ptr{Cvoid}
             C_NULL, # shutdown_complete_callback::Ptr{aws_http_connection_manager_shutdown_complete_fn}
             false, # enable_read_back_pressure::Bool
-            max_connection_idle_in_milliseconds
+            max_connection_idle_in_milliseconds,
+            C_NULL, # network_interface_names_array
+            0, # num_network_interface_names
         ))
         connection_manager = aws_http_connection_manager_new(allocator, conn_manager_opts)
         connection_manager == C_NULL && aws_throw_error()
