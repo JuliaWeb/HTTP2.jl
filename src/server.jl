@@ -288,3 +288,5 @@ function Base.close(server::Server)
     end
     return
 end
+
+Base.isopen(server::Server) = @atomic(server.state) != :closed
