@@ -201,7 +201,7 @@ function c_on_response_headers(stream, header_block, header_array, num_headers, 
     return Cint(0)
 end
 
-writebuf(body, maxsize=length(body) == 0 ? typemax(Int64) : length(body)) = Base.GenericIOBuffer{Vector{UInt8}}(body, true, true, true, false, maxsize)
+writebuf(body, maxsize=length(body) == 0 ? typemax(Int64) : length(body)) = Base.GenericIOBuffer{AbstractVector{UInt8}}(body, true, true, true, false, maxsize)
 
 const on_response_header_block_done = Ref{Ptr{Cvoid}}(C_NULL)
 
