@@ -190,13 +190,16 @@ end
 
 const on_response_headers = Ref{Ptr{Cvoid}}(C_NULL)
 
-function c_on_response_headers(stream, header_block, header_array, num_headers, ctx_ptr)
+function c_on_response_headers(stream, header_block, header_array::Ptr{aws_http_header}, num_headers, ctx_ptr)
     ctx = unsafe_pointer_to_objref(ctx_ptr)
-    headers = unsafe_wrap(Array, Ptr{aws_http_header}(header_array), num_headers)
-    for header in headers
+    headers = ctx.response.headers
+    oldlen = length(headers)
+    resize!(headers, oldlen + num_headers)
+    for i = 1:num_headers
+        header = unsafe_load(header_array, i)
         name = unsafe_string(header.name.ptr, header.name.len)
         value = unsafe_string(header.value.ptr, header.value.len)
-        push!(ctx.response.headers, name => value)
+        headers[oldlen + i] = name => value
     end
     return Cint(0)
 end
