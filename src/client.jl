@@ -341,40 +341,39 @@ function mkheaders(h, headers=Vector{Header}(undef, length(h)))::Headers
     return headers
 end
 
-function request(method, url, h=Header[], b::RequestBodyTypes=nothing;
-    allocator=default_aws_allocator(),
-    headers=h,
-    body::RequestBodyTypes=b,
-    query=nothing,
-    client::Union{Nothing, Client}=nothing,
-    require_ssl_verification::Bool=true,
-    response_stream=nothing, # compat
-    response_body=response_stream,
-    decompress::Union{Nothing, Bool}=nothing,
-    status_exception::Bool=true,
-    retry_non_idempotent::Bool=false,
-    modifier=nothing,
-    verbose=0,
-    kw...)
-    req = Request(method, url, mkheaders(headers), body, allocator, query)
-    verbose >= 1 && @info "getting client: $(req.uri.scheme), $(req.uri.host), $(getport(req._uri))"
-    client = something(client, getclient((req.uri.scheme, req.uri.host, getport(req._uri), require_ssl_verification)))::Client
-    # create a request context for shared state that we pass between all the callbacks
-    ctx = RequestContext(client, req, Response(response_body), decompress, status_exception, retry_non_idempotent, modifier, verbose)
-    return GC.@preserve ctx request(ctx, req; client=client, verbose=verbose, kw...)
-end
+request(method, url, h=Header[], b::RequestBodyTypes=nothing; allocator=default_aws_allocator(), headers=h, body::RequestBodyTypes=b, query=nothing, kw...) =
+    request(Request(method, url, mkheaders(headers), body, allocator, query); kw...)
 
 # main entrypoint for making an HTTP request
 # can provide method, url, headers, body, along with various keyword arguments
-function request(ctx::RequestContext, req::Request;
+function request(req::Request;
     client::Union{Nothing, Client}=nothing,
     # redirect options
     redirect=true,
     redirect_limit=3,
     redirect_method=nothing,
     forwardheaders=true,
-    verbose=0)
+    # response options
+    response_stream=nothing, # compat
+    response_body=response_stream,
+    decompress::Union{Nothing, Bool}=nothing,
+    status_exception::Bool=true,
+    retry_non_idempotent::Bool=false,
+    require_ssl_verification::Bool=true,
+    modifier=nothing,
+    verbose=0,
     # NOTE: new keywords must also be added to the @client macro definition below
+)
+
+    verbose >= 1 && @info "getting client: $(req.uri.scheme), $(req.uri.host), $(getport(req._uri))"
+    client = something(client, getclient((req.uri.scheme, req.uri.host, getport(req._uri), require_ssl_verification)))::Client
+    # create a request context for shared state that we pass between all the callbacks
+    ctx = RequestContext(client, req, Response(response_body), decompress, status_exception, retry_non_idempotent, modifier, verbose)
+
+    return GC.@preserve ctx _request(ctx, req, client, redirect, redirect_limit, redirect_method, forwardheaders, require_ssl_verification, verbose)
+end
+
+function _request(ctx, req, client, redirect, redirect_limit, redirect_method, forwardheaders, require_ssl_verification, verbose)
     # NOTE: this is threadsafe based on our usage of the "standard retry strategy" default aws implementation
 @label acquire_retry_token
     verbose >= 1 && @info "acquiring retry token: $(req.uri.host)"
