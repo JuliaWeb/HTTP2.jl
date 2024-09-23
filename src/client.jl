@@ -12,8 +12,10 @@ function make_input_stream(ctx)
             input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
         elseif ctx.request.body isa AbstractVector{UInt8}
             ctx.request_body = ctx.request.body
-            ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request.body), pointer(ctx.request.body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
+            GC.@preserve ctx.request_body begin
+                ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+                input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
+            end
         elseif ctx.request.body isa Union{AbstractDict, NamedTuple}
             # add application/x-www-form-urlencoded content-type header if not already present
             if !hasheader(headers, "content-type")
@@ -33,8 +35,10 @@ function make_input_stream(ctx)
             end
             # we set the request.body to the Form bytes in order to gc-preserve them
             ctx.request_body = read(ctx.request.body)
-            ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
+            GC.@preserve ctx.request_body begin
+                ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+                input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
+            end
         elseif ctx.request.body isa IO
             # we set the request.body to the IO bytes in order to gc-preserve them
             bytes = readavailable(ctx.request.body)
@@ -42,8 +46,10 @@ function make_input_stream(ctx)
                 append!(bytes, readavailable(ctx.request.body))
             end
             ctx.request_body = bytes
-            ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
-            input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
+            GC.@preserve ctx.request_body begin
+                ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+                input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
+            end
         else
             throw(ArgumentError("request body must be a string, vector of UInt8, or IO"))
         end
@@ -155,7 +161,7 @@ function c_on_setup(conn, error_code, ctx_ptr)
     ctx.request_options = Ref(aws_http_make_request_options(
         1,
         request,
-        pointer_from_objref(ctx),
+        ctx_ptr,
         on_response_headers[],
         on_response_header_block_done[],
         on_response_body[],
