@@ -250,7 +250,7 @@ mutable struct RequestContext
     request_body::Any
     body_byte_cursor::aws_byte_cursor
     response::Response
-    response_headers::Vector{Header2}
+    response_headers::Memory{Header2}
     temp_response_body::Any
     gzip_decompressing::Bool
     error_response_body::Union{Nothing, Vector{UInt8}}
@@ -265,7 +265,7 @@ mutable struct RequestContext
 end
 
 function RequestContext(client, request, response, args...)
-    return RequestContext(client, C_NULL, false, Threads.Event(), nothing, request, nothing, aws_byte_cursor(0, C_NULL), response, Header2[], nothing, false, nothing, Ref{aws_http_make_request_options}(), C_NULL, C_NULL, args...)
+    return RequestContext(client, C_NULL, false, Threads.Event(), nothing, request, nothing, aws_byte_cursor(0, C_NULL), response, Memory{Header2}(undef, 0), nothing, false, nothing, Ref{aws_http_make_request_options}(), C_NULL, C_NULL, args...)
 end
 
 struct StatusError <: Exception

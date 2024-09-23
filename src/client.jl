@@ -194,12 +194,17 @@ function c_on_response_headers(stream, header_block, header_array::Ptr{aws_http_
     ctx = unsafe_pointer_to_objref(ctx_ptr)
     headers = ctx.response_headers
     oldlen = length(headers)
-    resize!(headers, oldlen + num_headers)
+    newlen = oldlen + Int(num_headers)
+    newheaders = Memory{Header2}(undef, newlen)
+    ctx.response_headers = newheaders
+    for i = 1:oldlen
+        newheaders[i] = headers[i]
+    end
     for i = 1:num_headers
         header = unsafe_load(header_array, i)
         name = unsafe_string(header.name.ptr, header.name.len)
         value = unsafe_string(header.value.ptr, header.value.len)
-        headers[oldlen + i] = Header2(name, value)
+        newheaders[oldlen + i] = Header2(name, value)
     end
     return Cint(0)
 end
