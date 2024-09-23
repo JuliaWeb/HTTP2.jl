@@ -192,7 +192,7 @@ const on_response_headers = Ref{Ptr{Cvoid}}(C_NULL)
 
 function c_on_response_headers(stream, header_block, header_array::Ptr{aws_http_header}, num_headers, ctx_ptr)
     ctx = unsafe_pointer_to_objref(ctx_ptr)
-    headers = ctx.response.headers
+    headers = ctx.response_headers
     oldlen = length(headers)
     resize!(headers, oldlen + num_headers)
     for i = 1:num_headers
@@ -211,6 +211,7 @@ const on_response_header_block_done = Ref{Ptr{Cvoid}}(C_NULL)
 function c_on_response_header_block_done(stream, header_block, ctx_ptr)
     ctx = unsafe_pointer_to_objref(ctx_ptr)
     ref = Ref{Cint}()
+    ctx.response.headers = ctx.response_headers
     aws_http_stream_get_incoming_response_status(stream, ref)
     ctx.response.status = ref[]
     if ctx.status_exception && ctx.response.status >= 299
