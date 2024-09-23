@@ -192,11 +192,11 @@ const on_response_headers = Ref{Ptr{Cvoid}}(C_NULL)
 
 function c_on_response_headers(stream, header_block, header_array::Ptr{aws_http_header}, num_headers, ctx_ptr)
     ctx = unsafe_pointer_to_objref(ctx_ptr)
-    headers = ctx.response_headers
+    headers = ctx.response.headers
     oldlen = length(headers)
     newlen = oldlen + Int(num_headers)
-    newheaders = Memory{Header2}(undef, newlen)
-    ctx.response_headers = newheaders
+    newheaders = Vector{Header}(undef, newlen)
+    ctx.response.headers = newheaders
     for i = 1:oldlen
         newheaders[i] = headers[i]
     end
@@ -204,7 +204,7 @@ function c_on_response_headers(stream, header_block, header_array::Ptr{aws_http_
         header = unsafe_load(header_array, i)
         name = unsafe_string(header.name.ptr, header.name.len)
         value = unsafe_string(header.value.ptr, header.value.len)
-        newheaders[oldlen + i] = Header2(name, value)
+        newheaders[oldlen + i] = name => value
     end
     return Cint(0)
 end
@@ -216,7 +216,6 @@ const on_response_header_block_done = Ref{Ptr{Cvoid}}(C_NULL)
 function c_on_response_header_block_done(stream, header_block, ctx_ptr)
     ctx = unsafe_pointer_to_objref(ctx_ptr)
     ref = Ref{Cint}()
-    ctx.response.headers = [x.name => x.value for x in ctx.response_headers]
     aws_http_stream_get_incoming_response_status(stream, ref)
     ctx.response.status = ref[]
     if ctx.status_exception && ctx.response.status >= 299
