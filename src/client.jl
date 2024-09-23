@@ -341,155 +341,158 @@ function mkheaders(h, headers=Vector{Header}(undef, length(h)))::Headers
     return headers
 end
 
-request(method, url, h=Header[], b::RequestBodyTypes=nothing; allocator=default_aws_allocator(), headers=h, body::RequestBodyTypes=b, query=nothing, kw...) =
-    request(Request(method, url, mkheaders(headers), body, allocator, query); kw...)
+function request(method, url, h=Header[], b::RequestBodyTypes=nothing;
+    allocator=default_aws_allocator(),
+    headers=h,
+    body::RequestBodyTypes=b,
+    query=nothing,
+    client::Union{Nothing, Client}=nothing,
+    require_ssl_verification::Bool=true,
+    response_stream=nothing, # compat
+    response_body=response_stream,
+    decompress::Union{Nothing, Bool}=nothing,
+    status_exception::Bool=true,
+    retry_non_idempotent::Bool=false,
+    modifier=nothing,
+    verbose=0,
+    kw...)
+    req = Request(method, url, mkheaders(headers), body, allocator, query)
+    verbose >= 1 && @info "getting client: $(req.uri.scheme), $(req.uri.host), $(getport(req._uri))"
+    client = something(client, getclient((req.uri.scheme, req.uri.host, getport(req._uri), require_ssl_verification)))::Client
+    # create a request context for shared state that we pass between all the callbacks
+    ctx = RequestContext(client, req, Response(response_body), decompress, status_exception, retry_non_idempotent, modifier, verbose)
+    return GC.@preserve ctx request(ctx, req; client=client, verbose=verbose, kw...)
+end
 
 # main entrypoint for making an HTTP request
 # can provide method, url, headers, body, along with various keyword arguments
-function request(req::Request;
+function request(ctx::RequestContext, req::Request;
     client::Union{Nothing, Client}=nothing,
     # redirect options
     redirect=true,
     redirect_limit=3,
     redirect_method=nothing,
     forwardheaders=true,
-    # response options
-    response_stream=nothing, # compat
-    response_body=response_stream,
-    decompress::Union{Nothing, Bool}=nothing,
-    status_exception::Bool=true,
-    retry_non_idempotent::Bool=false,
-    require_ssl_verification::Bool=true,
-    modifier=nothing,
-    verbose=0,
+    verbose=0)
     # NOTE: new keywords must also be added to the @client macro definition below
-)
-
-    verbose >= 1 && @info "getting client: $(req.uri.scheme), $(req.uri.host), $(getport(req._uri))"
-    client = something(client, getclient((req.uri.scheme, req.uri.host, getport(req._uri), require_ssl_verification)))::Client
-    # create a request context for shared state that we pass between all the callbacks
-    ctx = RequestContext(client, req, Response(response_body), decompress, status_exception, retry_non_idempotent, modifier, verbose)
-
     # NOTE: this is threadsafe based on our usage of the "standard retry strategy" default aws implementation
-    GC.@preserve ctx begin
 @label acquire_retry_token
-        verbose >= 1 && @info "acquiring retry token: $(req.uri.host)"
-        host_ref = Ref(req._uri.host_name)
-        if aws_retry_strategy_acquire_retry_token(client.retry_strategy, host_ref, on_acquired[], pointer_from_objref(ctx), client.retry_timeout_ms) != 0
-            ctx.error = CapturedException(aws_error(), Base.backtrace())
-            @goto error_fail
-        end
-        error_type = AWS_RETRY_ERROR_TYPE_TRANSIENT
+    verbose >= 1 && @info "acquiring retry token: $(req.uri.host)"
+    host_ref = Ref(req._uri.host_name)
+    if aws_retry_strategy_acquire_retry_token(client.retry_strategy, host_ref, on_acquired[], pointer_from_objref(ctx), client.retry_timeout_ms) != 0
+        ctx.error = CapturedException(aws_error(), Base.backtrace())
+        @goto error_fail
+    end
+    error_type = AWS_RETRY_ERROR_TYPE_TRANSIENT
 
     # eventually, one of our callbacks will notify ctx.completed, at which point we can return
 @label request_wait
-        wait(ctx.completed)
-        # check for redirect
-        verbose >= 2 && @info "checking for redirect / retry" error=ctx.error should_retry=ctx.should_retry redirect_limit status=ctx.response.status location=getheader(ctx.response.headers, "location")
-        if ctx.response.status in (301, 302, 303, 307, 308)
-            if redirect && redirect_limit > 0 && getheader(ctx.response.headers, "location") != ""
-                ctx.error = nothing
-                ctx.should_retry = false
-                reset(ctx.completed)
-                old_host = ctx.request.uri.host
-                ctx.request.uri = resolvereference(ctx.request.uri, getheader(ctx.response.headers, "location"))
-                uri_ref = Ref{aws_uri}()
-                url_str = string(ctx.request.uri)
-                GC.@preserve url_str begin
-                    url_ref = Ref(aws_byte_cursor(sizeof(url_str), pointer(url_str)))
-                    aws_uri_init_parse(uri_ref, client.allocator, url_ref)
-                end
-                ctx.request._uri = uri_ref[]
-                ctx.request.method = newmethod(ctx.request.method, ctx.response.status, redirect_method)
-                verbose >= 1 && @info "getting redirect client: $(ctx.request.uri.scheme), $(ctx.request.uri.host), $(getport(ctx.request._uri))"
-                old_client = ctx.client
-                ctx.client = getclient((ctx.request.uri.scheme, ctx.request.uri.host, getport(ctx.request._uri), require_ssl_verification))
-                verbose >= 2 && @info "redirecting to $(string(ctx.request.uri)) with method: $(String(ctx.request.method))"
-                if ctx.request.method == "GET"
-                    ctx.request.body = UInt8[]
-                end
-                if forwardheaders
-                    ctx.request.headers = filter(ctx.request.headers) do (header, _)
-                        # false return values are filtered out
-                        if header == "Host"
-                            return false
-                        elseif (header in SENSITIVE_HEADERS && !isdomainorsubdomain(ctx.request.uri.host, old_host))
-                            return false
-                        elseif ctx.request.method == "GET" && (ascii_lc_isequal(header, "content-type") || ascii_lc_isequal(header, "content-length"))
-                            return false
-                        else
-                            return true
-                        end
-                    end
-                else
-                    ctx.request.headers = Header[]
-                end
-                empty!(ctx.response.headers)
-                redirect_limit -= 1
-                #TODO: should we rely on the retry strategy to handle this?
-                # that means redirects count against your retries...
-                # but also not sure we should be doing multiple requests w/ the same
-                # retry token without recording success/scheduling a retry
-                if old_client != ctx.client
-                    aws_retry_token_record_success(ctx.retry_token)
-                    aws_retry_token_release(ctx.retry_token)
-                    @goto acquire_retry_token
-                else
-                    verbose >= 1 && @info "scheduling redirect retry: $(ctx.request.uri.host)"
-                    if aws_retry_strategy_schedule_retry(
-                        ctx.retry_token,
-                        error_type,
-                        retry_ready[],
-                        pointer_from_objref(ctx)
-                    ) != 0
-                        ctx.error = CapturedException(aws_error(), Base.backtrace())
-                        @goto error_fail
-                    end
-                    @goto request_wait
-                end
-            end
-        elseif ctx.error !== nothing && ctx.should_retry
+    wait(ctx.completed)
+    # check for redirect
+    verbose >= 2 && @info "checking for redirect / retry" error=ctx.error should_retry=ctx.should_retry redirect_limit status=ctx.response.status location=getheader(ctx.response.headers, "location")
+    if ctx.response.status in (301, 302, 303, 307, 308)
+        if redirect && redirect_limit > 0 && getheader(ctx.response.headers, "location") != ""
             ctx.error = nothing
             ctx.should_retry = false
             reset(ctx.completed)
-            empty!(ctx.response.headers)
-            verbose >= 1 && @info "scheduling error retry: $(ctx.request.uri.host)"
-            ret = aws_retry_strategy_schedule_retry(
-                ctx.retry_token,
-                error_type,
-                retry_ready[],
-                pointer_from_objref(ctx)
-            )
-            if ret != 0
-                # NOTE: we're manually creating an AWSError here because calling aws_error
-                # doesn't return anything useful, even though from the source code it should?
-                ctx.error = CapturedException(AWSError("scheduling retry failed: $(ctx.request.uri.host)"), Base.backtrace())
-                @goto error_fail
+            old_host = ctx.request.uri.host
+            ctx.request.uri = resolvereference(ctx.request.uri, getheader(ctx.response.headers, "location"))
+            uri_ref = Ref{aws_uri}()
+            url_str = string(ctx.request.uri)
+            GC.@preserve url_str begin
+                url_ref = Ref(aws_byte_cursor(sizeof(url_str), pointer(url_str)))
+                aws_uri_init_parse(uri_ref, client.allocator, url_ref)
             end
-            @goto request_wait
+            ctx.request._uri = uri_ref[]
+            ctx.request.method = newmethod(ctx.request.method, ctx.response.status, redirect_method)
+            verbose >= 1 && @info "getting redirect client: $(ctx.request.uri.scheme), $(ctx.request.uri.host), $(getport(ctx.request._uri))"
+            old_client = ctx.client
+            ctx.client = getclient((ctx.request.uri.scheme, ctx.request.uri.host, getport(ctx.request._uri), require_ssl_verification))
+            verbose >= 2 && @info "redirecting to $(string(ctx.request.uri)) with method: $(String(ctx.request.method))"
+            if ctx.request.method == "GET"
+                ctx.request.body = UInt8[]
+            end
+            if forwardheaders
+                ctx.request.headers = filter(ctx.request.headers) do (header, _)
+                    # false return values are filtered out
+                    if header == "Host"
+                        return false
+                    elseif (header in SENSITIVE_HEADERS && !isdomainorsubdomain(ctx.request.uri.host, old_host))
+                        return false
+                    elseif ctx.request.method == "GET" && (ascii_lc_isequal(header, "content-type") || ascii_lc_isequal(header, "content-length"))
+                        return false
+                    else
+                        return true
+                    end
+                end
+            else
+                ctx.request.headers = Header[]
+            end
+            empty!(ctx.response.headers)
+            redirect_limit -= 1
+            #TODO: should we rely on the retry strategy to handle this?
+            # that means redirects count against your retries...
+            # but also not sure we should be doing multiple requests w/ the same
+            # retry token without recording success/scheduling a retry
+            if old_client != ctx.client
+                aws_retry_token_record_success(ctx.retry_token)
+                aws_retry_token_release(ctx.retry_token)
+                @goto acquire_retry_token
+            else
+                verbose >= 1 && @info "scheduling redirect retry: $(ctx.request.uri.host)"
+                if aws_retry_strategy_schedule_retry(
+                    ctx.retry_token,
+                    error_type,
+                    retry_ready[],
+                    pointer_from_objref(ctx)
+                ) != 0
+                    ctx.error = CapturedException(aws_error(), Base.backtrace())
+                    @goto error_fail
+                end
+                @goto request_wait
+            end
         end
+    elseif ctx.error !== nothing && ctx.should_retry
+        ctx.error = nothing
+        ctx.should_retry = false
+        reset(ctx.completed)
+        empty!(ctx.response.headers)
+        verbose >= 1 && @info "scheduling error retry: $(ctx.request.uri.host)"
+        ret = aws_retry_strategy_schedule_retry(
+            ctx.retry_token,
+            error_type,
+            retry_ready[],
+            pointer_from_objref(ctx)
+        )
+        if ret != 0
+            # NOTE: we're manually creating an AWSError here because calling aws_error
+            # doesn't return anything useful, even though from the source code it should?
+            ctx.error = CapturedException(AWSError("scheduling retry failed: $(ctx.request.uri.host)"), Base.backtrace())
+            @goto error_fail
+        end
+        @goto request_wait
+    end
 
-        # release our retry token
-        ctx.error === nothing && aws_retry_token_record_success(ctx.retry_token)
-        aws_retry_token_release(ctx.retry_token)
-        ctx.retry_token = C_NULL
-        ctx.error !== nothing && @goto error_fail
-        return ctx.response
+    # release our retry token
+    ctx.error === nothing && aws_retry_token_record_success(ctx.retry_token)
+    aws_retry_token_release(ctx.retry_token)
+    ctx.retry_token = C_NULL
+    ctx.error !== nothing && @goto error_fail
+    return ctx.response
 
 @label error_fail
-        ctx.retry_token != C_NULL && aws_retry_token_release(ctx.retry_token)
-        if ctx.error_response_body !== nothing
-            # commit the temporary response body to the response body
-            if ctx.response.body === nothing
-                ctx.response.body = ctx.error_response_body
-            elseif ctx.response.body isa AbstractVector{UInt8}
-                copyto!(ctx.response.body, ctx.error_response_body)
-            else
-                write(ctx.response.body, ctx.error_response_body)
-            end
+    ctx.retry_token != C_NULL && aws_retry_token_release(ctx.retry_token)
+    if ctx.error_response_body !== nothing
+        # commit the temporary response body to the response body
+        if ctx.response.body === nothing
+            ctx.response.body = ctx.error_response_body
+        elseif ctx.response.body isa AbstractVector{UInt8}
+            copyto!(ctx.response.body, ctx.error_response_body)
+        else
+            write(ctx.response.body, ctx.error_response_body)
         end
-        throw(ctx.error)
     end
+    throw(ctx.error)
 end
 
 const retry_ready = Ref{Ptr{Cvoid}}(C_NULL)
