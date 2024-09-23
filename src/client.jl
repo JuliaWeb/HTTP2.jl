@@ -12,8 +12,9 @@ function make_input_stream(ctx)
             input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
         elseif ctx.request.body isa AbstractVector{UInt8}
             ctx.request_body = ctx.request.body
-            GC.@preserve ctx.request_body begin
-                ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+            rb = ctx.request_body
+            GC.@preserve rb begin
+                ctx.body_byte_cursor = aws_byte_cursor(sizeof(rb), pointer(rb))
                 input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
             end
         elseif ctx.request.body isa Union{AbstractDict, NamedTuple}
@@ -35,8 +36,9 @@ function make_input_stream(ctx)
             end
             # we set the request.body to the Form bytes in order to gc-preserve them
             ctx.request_body = read(ctx.request.body)
-            GC.@preserve ctx.request_body begin
-                ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+            rb = ctx.request_body
+            GC.@preserve rb begin
+                ctx.body_byte_cursor = aws_byte_cursor(sizeof(rb), pointer(rb))
                 input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
             end
         elseif ctx.request.body isa IO
@@ -46,8 +48,9 @@ function make_input_stream(ctx)
                 append!(bytes, readavailable(ctx.request.body))
             end
             ctx.request_body = bytes
-            GC.@preserve ctx.request_body begin
-                ctx.body_byte_cursor = aws_byte_cursor(sizeof(ctx.request_body), pointer(ctx.request_body))
+            rb = ctx.request_body
+            GC.@preserve rb begin
+                ctx.body_byte_cursor = aws_byte_cursor(sizeof(rb), pointer(rb))
                 input_stream = aws_input_stream_new_from_cursor(ctx.client.allocator, FieldRef(ctx, :body_byte_cursor))
             end
         else
