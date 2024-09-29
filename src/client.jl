@@ -188,6 +188,7 @@ function c_on_setup(conn, error_code, ctx_ptr)
     ctx.verbose >= 3 && print_request(stdout, ctx.request.method, String(path), headers, something(ctx.request.body, UInt8[]))
     ctx.verbose >= 1 && @info "activating stream: $(ctx.request.uri.host)"
     aws_http_stream_activate(stream)
+    @info "activated stream" stream_id=aws_http_stream_get_id(stream)
     return
 end
 
@@ -200,6 +201,7 @@ end
 const on_response_headers = Ref{Ptr{Cvoid}}(C_NULL)
 
 function c_on_response_headers(stream, header_block, header_array::Ptr{aws_http_header}, num_headers, ctx_ptr)
+    @info "on response headers" stream_id=aws_http_stream_get_id(stream)
     ctx = unsafe_pointer_to_objref(ctx_ptr)
     headers = ctx.response.headers
     oldlen = length(headers)
@@ -321,6 +323,7 @@ end
 const on_complete = Ref{Ptr{Cvoid}}(C_NULL)
 
 function c_on_complete(stream, error_code, ctx_ptr)
+    @info "on complete" stream_id=aws_http_stream_get_id(stream)
     ctx = unsafe_pointer_to_objref(ctx_ptr)
     if ctx.gzip_decompressing
         close(ctx.temp_response_body)
