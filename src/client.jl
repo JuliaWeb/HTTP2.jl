@@ -332,6 +332,7 @@ function c_on_complete(stream, error_code, ctx_ptr)
     # release connection back to connection manager
     aws_http_connection_manager_release_connection(ctx.client.connection_manager, ctx.connection)
     ctx.verbose >= 3 && print_response(stdout, ctx.response.status, ctx.response.headers, something(ctx.error_response_body, ctx.response.body))
+    ctx.stream = C_NULL
     Threads.notify(ctx.completed)
     return
 end
@@ -399,6 +400,9 @@ function _request(ctx, req, client, redirect, redirect_limit, redirect_method, f
     # eventually, one of our callbacks will notify ctx.completed, at which point we can return
 @label request_wait
     wait(ctx.completed)
+    if ctx.stream != C_NULL
+        @warn "stream not closed" stream_id=aws_http_stream_get_id(ctx.stream)
+    end
     # check for redirect
     verbose >= 2 && @info "checking for redirect / retry" error=ctx.error should_retry=ctx.should_retry redirect_limit status=ctx.response.status location=getheader(ctx.response.headers, "location")
     if ctx.response.status in (301, 302, 303, 307, 308)
